@@ -12,6 +12,7 @@ import {
   type WSClient,
   type ChatMessage,
   getRecentTracks,
+  pushRecentTrack,
 } from "./roomManager.js";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
@@ -131,11 +132,20 @@ export async function handleWS(ws: any, url: URL) {
               artistName: msg.artistName ?? "",
               image: msg.image ?? "",
             }).catch(console.error);
+
+            pushRecentTrack(roomCode, {
+              videoId: msg.videoId,
+              trackName: msg.trackName ?? "",
+              artistName: msg.artistName ?? "",
+              image: msg.image ?? "",
+              playedAt: Date.now(),
+            });
           }
 
           broadcast(roomCode, {
             type: "playback:play",
             ...getPlayback(roomCode),
+            recentTracks: getRecentTracks(roomCode),
           });
           break;
         }
@@ -166,6 +176,7 @@ export async function handleWS(ws: any, url: URL) {
           sendTo(socketId, roomCode, {
             type: "playback:sync",
             ...getPlayback(roomCode),
+            recentTracks: getRecentTracks(roomCode),
           });
           break;
         }
