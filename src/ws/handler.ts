@@ -181,6 +181,23 @@ export async function handleWS(ws: any, url: URL) {
             type: "playback:sync",
             ...getPlayback(roomCode),
             recentTracks: getRecentTracks(roomCode),
+            queue: getQueue(roomCode),
+          });
+          break;
+        }
+        case "queue:add": {
+          addToQueue(roomCode, msg.track);
+          broadcast(roomCode, {
+            type: "room:queue_update",
+            queue: getQueue(roomCode),
+          });
+          break;
+        }
+        case "queue:remove": {
+          removeFromQueue(roomCode, msg.trackId);
+          broadcast(roomCode, {
+            type: "room:queue_update",
+            queue: getQueue(roomCode),
           });
           break;
         }
