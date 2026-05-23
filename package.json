@@ -8,7 +8,8 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.19.14",
-    "hono": "^4.12.21"
+    "hono": "^4.12.21",
+    "ytmusic-api": "^5.3.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.17",
