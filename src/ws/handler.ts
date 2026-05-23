@@ -13,6 +13,9 @@ import {
   type ChatMessage,
   getRecentTracks,
   pushRecentTrack,
+  getQueue,
+  addToQueue,
+  removeFromQueue,
 } from "./roomManager.js";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
@@ -75,6 +78,7 @@ export async function handleWS(ws: any, url: URL) {
       members: getRoomMembers(roomCode),
       playback: getPlayback(roomCode),
       recentTracks: getRecentTracks(roomCode),
+      queue: getQueue(roomCode),
     }),
   );
 

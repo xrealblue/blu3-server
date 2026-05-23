@@ -39,7 +39,8 @@ interface Room {
   hostId: string;
   clients: Map<string, WSClient>;
   playback: PlaybackState;
-  recentTracks: RecentTrack[]; // NEW
+  recentTracks: RecentTrack[];
+  queue: any[];
 }
 
 const rooms = new Map<string, Room>();
@@ -60,6 +61,7 @@ export function getOrCreateRoom(code: string, hostId: string): Room {
         updatedAt: Date.now(),
       },
       recentTracks: [],
+      queue: [],
     });
   }
   return rooms.get(code)!;
@@ -146,4 +148,35 @@ export function sendTo(socketId: string, roomCode: string, msg: object) {
       console.error("SendTo error:", err);
     }
   }
+}
+
+export interface QueueTrack {
+  id: string;
+  videoId: string;
+  name: string;
+  artists: { name: string }[];
+  image: string;
+  duration_ms?: number;
+}
+
+export function getQueue(code: string): QueueTrack[] {
+  return rooms.get(code)?.queue ?? [];
+}
+
+export function addToQueue(code: string, track: QueueTrack) {
+  const room = rooms.get(code);
+  if (!room) return;
+  room.queue.push(track);
+}
+
+export function removeFromQueue(code: string, trackId: string) {
+  const room = rooms.get(code);
+  if (!room) return;
+  room.queue = room.queue.filter((t) => t.id !== trackId);
+}
+
+export function clearQueue(code: string) {
+  const room = rooms.get(code);
+  if (!room) return;
+  room.queue = [];
 }
