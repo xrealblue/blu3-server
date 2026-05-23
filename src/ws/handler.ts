@@ -12,6 +12,9 @@ import {
   type ChatMessage,
 } from "./roomManager.js";
 import { nanoid } from "nanoid";
+import { db } from "../db/index.js";
+import { rooms } from "../db/schema.js";
+import { eq } from "drizzle-orm";
 
 export async function handleWS(ws: any, url: URL) {
   const token = url.searchParams.get("token");
@@ -45,7 +48,19 @@ export async function handleWS(ws: any, url: URL) {
     ws,
   };
 
-  const room = getOrCreateRoom(roomCode, payload.sub);
+  const [dbRoom] = await db
+    .select()
+    .from(rooms)
+    .where(eq(rooms.code, roomCode))
+    .limit(1);
+
+  if (!dbRoom) {
+    ws.send(JSON.stringify({ type: "error", message: "Room not found" }));
+    ws.close();
+    return null;
+  }
+
+  const room = getOrCreateRoom(roomCode, dbRoom.hostId);
   addClient(client);
 
   ws.send(

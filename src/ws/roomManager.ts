@@ -68,7 +68,6 @@ export function removeClient(socketId: string, roomCode: string) {
   const room = rooms.get(roomCode);
   if (!room) return;
   room.clients.delete(socketId);
-  if (room.clients.size === 0) rooms.delete(roomCode);
 }
 
 export function getRoomMembers(code: string) {
