@@ -80,6 +80,15 @@ export function getRoomMembers(code: string) {
   }));
 }
 
+export function isHostInRoom(code: string): boolean {
+  const room = rooms.get(code);
+  if (!room) return false;
+  for (const client of room.clients.values()) {
+    if (client.userId === room.hostId) return true;
+  }
+  return false;
+}
+
 export function setPlayback(code: string, state: Partial<PlaybackState>) {
   const room = rooms.get(code);
   if (!room) return;
@@ -88,15 +97,6 @@ export function setPlayback(code: string, state: Partial<PlaybackState>) {
 
 export function getPlayback(code: string): PlaybackState | null {
   return rooms.get(code)?.playback ?? null;
-}
-
-export function isHostOnline(code: string): boolean {
-  const room = rooms.get(code);
-  if (!room) return false;
-  for (const client of room.clients.values()) {
-    if (client.userId === room.hostId) return true;
-  }
-  return false;
 }
 
 export function broadcast(code: string, msg: object, excludeId?: string) {

@@ -8,7 +8,7 @@ import {
   getRoomMembers,
   setPlayback,
   getPlayback,
-  isHostOnline,
+  isHostInRoom,
   type WSClient,
   type ChatMessage,
 } from "./roomManager.js";
@@ -69,7 +69,6 @@ export async function handleWS(ws: any, url: URL) {
       type: "room:joined",
       roomCode,
       isHost: room.hostId === payload.sub,
-      hostOnline: isHostOnline(roomCode),
       members: getRoomMembers(roomCode),
       playback: getPlayback(roomCode),
     }),
@@ -110,8 +109,8 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "playback:play": {
-          const canControl = room.hostId === payload.sub || !isHostOnline(roomCode);
-          if (!canControl) return;
+          const isHostActive = isHostInRoom(roomCode);
+          if (isHostActive && room.hostId !== payload.sub) return;
           setPlayback(roomCode, {
             videoId: msg.videoId,
             trackName: msg.trackName ?? "",
@@ -127,8 +126,8 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "playback:pause": {
-          const canControl = room.hostId === payload.sub || !isHostOnline(roomCode);
-          if (!canControl) return;
+          const isHostActive = isHostInRoom(roomCode);
+          if (isHostActive && room.hostId !== payload.sub) return;
           setPlayback(roomCode, {
             isPlaying: false,
             currentTime: msg.currentTime ?? 0,
@@ -140,8 +139,8 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "playback:seek": {
-          const canControl = room.hostId === payload.sub || !isHostOnline(roomCode);
-          if (!canControl) return;
+          const isHostActive = isHostInRoom(roomCode);
+          if (isHostActive && room.hostId !== payload.sub) return;
           setPlayback(roomCode, { currentTime: msg.currentTime ?? 0 });
           broadcast(roomCode, {
             type: "playback:seek",
