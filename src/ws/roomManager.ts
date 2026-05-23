@@ -175,6 +175,17 @@ export function removeFromQueue(code: string, trackId: string) {
   room.queue = room.queue.filter((t) => t.id !== trackId);
 }
 
+export function insertQueueTop(code: string, track: QueueTrack) {
+  const room = rooms.get(code);
+  if (!room) return;
+  // Deduplicate: remove any other instance of this track
+  room.queue = room.queue.filter(
+    (t) => t.id !== track.id && t.videoId !== track.videoId,
+  );
+  // Add to index 0
+  room.queue.unshift(track);
+}
+
 export function clearQueue(code: string) {
   const room = rooms.get(code);
   if (!room) return;

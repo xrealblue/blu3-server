@@ -16,6 +16,7 @@ import {
   getQueue,
   addToQueue,
   removeFromQueue,
+  insertQueueTop,
 } from "./roomManager.js";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
@@ -144,12 +145,24 @@ export async function handleWS(ws: any, url: URL) {
               image: msg.image ?? "",
               playedAt: Date.now(),
             });
+
+            // Insert played track at the top of the queue
+            const queueTrack = {
+              id: msg.id || `room-${msg.videoId}`,
+              videoId: msg.videoId,
+              name: msg.trackName ?? "",
+              artists: [{ name: msg.artistName ?? "" }],
+              image: msg.image ?? "",
+              duration_ms: msg.duration_ms ?? 0,
+            };
+            insertQueueTop(roomCode, queueTrack);
           }
 
           broadcast(roomCode, {
             type: "playback:play",
             ...getPlayback(roomCode),
             recentTracks: getRecentTracks(roomCode),
+            queue: getQueue(roomCode),
           });
           break;
         }
