@@ -1,3 +1,4 @@
+import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
@@ -62,4 +63,30 @@ app.get("/api/search", async (c) => {
     ytmusic = null; // reset on error so next request reinitializes
     return c.json({ error: "Search failed" }, 500);
   }
+});
+
+app.get("/api/suggest", async (c) => {
+  const q = c.req.query("q");
+  if (!q?.trim()) return c.json({ suggestions: [] });
+
+  try {
+    const res = await fetch(
+      `https://suggestqueries-clients6.youtube.com/complete/search?client=youtube&ds=yt&q=${encodeURIComponent(q)}`,
+    );
+    const text = await res.text();
+    // response is JSONP-like: window.google.ac.h([...])
+    const match = text.match(/\[.*\]/s);
+    if (!match) return c.json({ suggestions: [] });
+    const parsed = JSON.parse(match[0]);
+    const suggestions: string[] = (parsed[1] ?? []).map((s: unknown[]) =>
+      String(s[0]),
+    );
+    return c.json({ suggestions: suggestions.slice(0, 8) });
+  } catch {
+    return c.json({ suggestions: [] });
+  }
+});
+
+serve({ fetch: app.fetch, port: 8000 }, (info) => {
+  console.log(`blu3 API running on http://localhost:${info.port}`);
 });
