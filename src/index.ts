@@ -1,13 +1,14 @@
-import { serve } from "@hono/node-server";
+import { serve, upgradeWebSocket } from "@hono/node-server"; // ← from node-server, not node-ws
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import * as dotenv from "dotenv";
 dotenv.config();
-
+import { WebSocketServer } from "ws";
 import YTMusic from "ytmusic-api";
 import authRoute from "./routes/auth.js";
 import roomsRoute from "./routes/rooms.js";
+import { handleWS } from "./ws/handler.js";
 
 let ytmusic: YTMusic | null = null;
 async function getYTMusic(): Promise<YTMusic> {
@@ -32,9 +33,31 @@ app.use(
 );
 
 app.get("/", (c) => c.json({ status: "ok", service: "blu3-api" }));
-
 app.route("/auth", authRoute);
 app.route("/api/rooms", roomsRoute);
+
+app.get(
+  "/ws",
+  upgradeWebSocket((c) => {
+    let handlers: Awaited<ReturnType<typeof handleWS>> = null;
+
+    return {
+      async onOpen(_, ws) {
+        const url = new URL(c.req.url);
+        handlers = await handleWS(ws, url);
+      },
+      onMessage(event) {
+        handlers?.onMessage(event);
+      },
+      onClose() {
+        handlers?.onClose();
+      },
+      onError(err) {
+        console.error("WS error:", err);
+      },
+    };
+  }),
+);
 
 app.get("/api/search", async (c) => {
   const q = c.req.query("q");
@@ -88,6 +111,17 @@ app.get("/api/suggest", async (c) => {
 });
 
 const port = Number(process.env.PORT ?? 8000);
-serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`blu3 API running on http://localhost:${info.port}`);
-});
+
+// ← KEY: create wss with noServer:true, pass via websocket option
+const wss = new WebSocketServer({ noServer: true });
+
+serve(
+  {
+    fetch: app.fetch,
+    port,
+    websocket: { server: wss }, // ← attach here
+  },
+  (info) => {
+    console.log(`blu3 API running on http://localhost:${info.port}`);
+  },
+);
