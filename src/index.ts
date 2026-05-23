@@ -27,3 +27,39 @@ app.use(
 );
 
 app.get("/", (c) => c.json({ status: "ok", service: "ytaudio-api" }));
+
+app.get("/api/search", async (c) => {
+  const q = c.req.query("q");
+  if (!q?.trim()) return c.json({ tracks: [] });
+
+  try {
+    const yt = await getYTMusic();
+    const results = await yt.searchSongs(q);
+
+    const tracks = results
+      .filter((r) => r.videoId) // skip results with no playable ID
+      .map((r) => {
+        const thumbs = r.thumbnails ?? [];
+        const rawThumb = thumbs[thumbs.length - 1]?.url ?? "";
+        // Force square high-res thumbnail
+        const image = rawThumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj");
+
+        return {
+          id: r.videoId,
+          videoId: r.videoId,
+          name: r.name,
+          duration_ms: (r.duration ?? 0) * 1000,
+          explicit: false,
+          artists: r.artist ? [{ name: r.artist.name }] : [],
+          album: { name: r.album?.name ?? "" },
+          image,
+        };
+      });
+
+    return c.json({ tracks });
+  } catch (err) {
+    console.error("Search error:", err);
+    ytmusic = null; // reset on error so next request reinitializes
+    return c.json({ error: "Search failed" }, 500);
+  }
+});
