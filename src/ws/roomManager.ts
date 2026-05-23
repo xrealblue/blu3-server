@@ -23,7 +23,15 @@ export interface PlaybackState {
   image: string;
   isPlaying: boolean;
   currentTime: number;
-  updatedAt: number; // server timestamp when state last changed
+  updatedAt: number;
+}
+
+export interface RecentTrack {
+  videoId: string;
+  trackName: string;
+  artistName: string;
+  image: string;
+  playedAt: number;
 }
 
 interface Room {
@@ -31,6 +39,7 @@ interface Room {
   hostId: string;
   clients: Map<string, WSClient>;
   playback: PlaybackState;
+  recentTracks: RecentTrack[]; // NEW
 }
 
 const rooms = new Map<string, Room>();
@@ -50,9 +59,23 @@ export function getOrCreateRoom(code: string, hostId: string): Room {
         currentTime: 0,
         updatedAt: Date.now(),
       },
+      recentTracks: [],
     });
   }
   return rooms.get(code)!;
+}
+
+export function pushRecentTrack(code: string, track: RecentTrack) {
+  const room = rooms.get(code);
+  if (!room) return;
+  room.recentTracks = [
+    track,
+    ...room.recentTracks.filter((t) => t.videoId !== track.videoId),
+  ].slice(0, 10);
+}
+
+export function getRecentTracks(code: string): RecentTrack[] {
+  return rooms.get(code)?.recentTracks ?? [];
 }
 
 export function getRoom(code: string) {

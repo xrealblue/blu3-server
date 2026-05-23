@@ -1,4 +1,11 @@
-import { pgTable, text, timestamp, uuid, boolean } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  boolean,
+  index,
+} from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -31,6 +38,28 @@ export const roomMembers = pgTable("room_members", {
   joinedAt: timestamp("joined_at").defaultNow().notNull(),
 });
 
+// db/schema.ts — add this table
+
+export const roomTrackHistory = pgTable(
+  "room_track_history",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    roomId: uuid("room_id")
+      .notNull()
+      .references(() => rooms.id, { onDelete: "cascade" }),
+    videoId: text("video_id").notNull(),
+    trackName: text("track_name").notNull(),
+    artistName: text("artist_name").notNull(),
+    image: text("image").notNull().default(""),
+    playedAt: timestamp("played_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("rth_room_idx").on(t.roomId), // fast lookup per room
+    index("rth_played_at_idx").on(t.playedAt), // fast ORDER BY playedAt DESC
+  ],
+);
+
+export type RoomTrackHistory = typeof roomTrackHistory.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type Room = typeof rooms.$inferSelect;
 export type RoomMember = typeof roomMembers.$inferSelect;

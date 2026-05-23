@@ -11,11 +11,13 @@ import {
   isHostInRoom,
   type WSClient,
   type ChatMessage,
+  getRecentTracks,
 } from "./roomManager.js";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
 import { rooms } from "../db/schema.js";
 import { eq } from "drizzle-orm";
+import { getTrackHistory, pushTrackHistory } from "../db/trackHistory.js";
 
 export async function handleWS(ws: any, url: URL) {
   const token = url.searchParams.get("token");
@@ -71,6 +73,7 @@ export async function handleWS(ws: any, url: URL) {
       isHost: room.hostId === payload.sub,
       members: getRoomMembers(roomCode),
       playback: getPlayback(roomCode),
+      recentTracks: getRecentTracks(roomCode),
     }),
   );
 
@@ -111,6 +114,7 @@ export async function handleWS(ws: any, url: URL) {
         case "playback:play": {
           const isHostActive = isHostInRoom(roomCode);
           if (isHostActive && room.hostId !== payload.sub) return;
+
           setPlayback(roomCode, {
             videoId: msg.videoId,
             trackName: msg.trackName ?? "",
@@ -119,6 +123,16 @@ export async function handleWS(ws: any, url: URL) {
             isPlaying: true,
             currentTime: msg.currentTime ?? 0,
           });
+
+          if (msg.videoId) {
+            pushTrackHistory(dbRoom.id, {
+              videoId: msg.videoId,
+              trackName: msg.trackName ?? "",
+              artistName: msg.artistName ?? "",
+              image: msg.image ?? "",
+            }).catch(console.error);
+          }
+
           broadcast(roomCode, {
             type: "playback:play",
             ...getPlayback(roomCode),
