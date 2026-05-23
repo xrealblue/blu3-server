@@ -1,25 +1,36 @@
-import { pgTable, text, timestamp, integer, uuid } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, uuid, boolean } from "drizzle-orm/pg-core";
+
+export const users = pgTable("users", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  googleId: text("google_id").notNull().unique(),
+  email: text("email").notNull().unique(),
+  name: text("name").notNull(),
+  avatar: text("avatar"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
 
 export const rooms = pgTable("rooms", {
-  id: text("id").primaryKey(),
-  hostId: text("host_id").notNull(),
-  currentVideoId: text("current_video_id"),
-  currentTrackName: text("current_track_name"),
-  currentTrackArtist: text("current_track_artist"),
-  currentTrackImage: text("current_track_image"),
-  playerState: text("player_state").default("paused"),
-  seekPosition: integer("seek_position").default(0),
-  updatedAt: timestamp("updated_at").defaultNow(),
-  createdAt: timestamp("created_at").defaultNow(),
+  id: uuid("id").primaryKey().defaultRandom(),
+  code: text("code").notNull().unique(), // short shareable code e.g. "ABC123"
+  name: text("name").notNull(),
+  hostId: uuid("host_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export const messages = pgTable("messages", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  roomId: text("room_id")
+export const roomMembers = pgTable("room_members", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  roomId: uuid("room_id")
     .notNull()
     .references(() => rooms.id, { onDelete: "cascade" }),
-  userId: text("user_id").notNull(),
-  username: text("username").notNull(),
-  text: text("text").notNull(),
-  createdAt: timestamp("created_at").defaultNow(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  joinedAt: timestamp("joined_at").defaultNow().notNull(),
 });
+
+export type User = typeof users.$inferSelect;
+export type Room = typeof rooms.$inferSelect;
+export type RoomMember = typeof roomMembers.$inferSelect;
