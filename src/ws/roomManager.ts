@@ -90,6 +90,15 @@ export function getPlayback(code: string): PlaybackState | null {
   return rooms.get(code)?.playback ?? null;
 }
 
+export function isHostOnline(code: string): boolean {
+  const room = rooms.get(code);
+  if (!room) return false;
+  for (const client of room.clients.values()) {
+    if (client.userId === room.hostId) return true;
+  }
+  return false;
+}
+
 export function broadcast(code: string, msg: object, excludeId?: string) {
   const room = rooms.get(code);
   if (!room) return;

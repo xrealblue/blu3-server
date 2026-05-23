@@ -8,6 +8,7 @@ import {
   getRoomMembers,
   setPlayback,
   getPlayback,
+  isHostOnline,
   type WSClient,
   type ChatMessage,
 } from "./roomManager.js";
