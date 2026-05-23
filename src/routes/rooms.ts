@@ -117,4 +117,25 @@ roomsRoute.delete("/:code", requireAuth, async (c) => {
   return c.json({ success: true });
 });
 
+// GET /api/rooms/user/mine — all rooms for current user
+roomsRoute.get("/user/mine", async (c) => {
+  const userId = c.get("userId");
+
+  const myRooms = await db
+    .select({
+      id: rooms.id,
+      code: rooms.code,
+      name: rooms.name,
+      hostId: rooms.hostId,
+      isActive: rooms.isActive,
+      createdAt: rooms.createdAt,
+    })
+    .from(roomMembers)
+    .innerJoin(rooms, eq(roomMembers.roomId, rooms.id))
+    .where(eq(roomMembers.userId, userId))
+    .orderBy(rooms.createdAt);
+
+  return c.json({ rooms: myRooms });
+});
+
 export default roomsRoute;
