@@ -3,7 +3,7 @@ services:
     name: blu3-backend
     runtime: node
     buildCommand: bun install && bun run build
-    startCommand: bun run dist/index.js
+    startCommand: bun run dist/server.js
     envVars:
       - key: NODE_ENV
         value: production
