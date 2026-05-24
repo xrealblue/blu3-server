@@ -17,12 +17,53 @@ import {
   addToQueue,
   removeFromQueue,
   insertQueueTop,
+  type QueueTrack,
 } from "./roomManager.js";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
 import { rooms } from "../db/schema.js";
 import { eq } from "drizzle-orm";
-import { getTrackHistory, pushTrackHistory } from "../db/trackHistory.js";
+import { pushTrackHistory } from "../db/trackHistory.js";
+
+const PLAY_SCHEDULE_LEAD_MS = 1500;
+const CONTROL_SCHEDULE_LEAD_MS = 350;
+
+export type WSMessage =
+  | { type: "clock_sync"; serverTime: number }
+  | { type: "ping"; clientTime: number }
+  | { type: "pong"; serverTime: number; rtt: number }
+  | { type: "schedule_play"; videoId: string; seekTo: number; targetTime: number }
+  | { type: "schedule_pause"; targetTime: number }
+  | { type: "schedule_seek"; seekTo: number; targetTime: number }
+  | {
+      type: "playback_state";
+      state: "playing" | "paused" | "buffering";
+      currentTime: number;
+    };
+
+type IncomingMessage =
+  | WSMessage
+  | { type: "chat:send"; text: string }
+  | {
+      type: "playback:play";
+      id?: string;
+      videoId: string;
+      trackName?: string;
+      artistName?: string;
+      image?: string;
+      currentTime?: number;
+      duration_ms?: number;
+    }
+  | { type: "playback:pause"; currentTime?: number }
+  | { type: "playback:seek"; currentTime?: number }
+  | { type: "playback:sync_request" }
+  | { type: "queue:add"; track: QueueTrack }
+  | { type: "queue:remove"; trackId: string };
+
+function canControlPlayback(roomCode: string, hostId: string, userId: string) {
+  const isHostActive = isHostInRoom(roomCode);
+  return !isHostActive || hostId === userId;
+}
 
 export async function handleWS(ws: any, url: URL) {
   const token = url.searchParams.get("token");
@@ -73,6 +114,13 @@ export async function handleWS(ws: any, url: URL) {
 
   ws.send(
     JSON.stringify({
+      type: "clock_sync",
+      serverTime: Date.now(),
+    } satisfies Extract<WSMessage, { type: "clock_sync" }>),
+  );
+
+  ws.send(
+    JSON.stringify({
       type: "room:joined",
       roomCode,
       isHost: room.hostId === payload.sub,
@@ -96,7 +144,7 @@ export async function handleWS(ws: any, url: URL) {
   // ← return handlers, no addEventListener
   return {
     onMessage(event: any) {
-      let msg: any;
+      let msg: IncomingMessage;
       try {
         const raw = typeof event.data === "string" ? event.data : event;
         msg = JSON.parse(raw);
@@ -105,6 +153,14 @@ export async function handleWS(ws: any, url: URL) {
       }
 
       switch (msg.type) {
+        case "ping": {
+          sendTo(socketId, roomCode, {
+            type: "pong",
+            serverTime: Date.now(),
+            rtt: 0,
+          } satisfies Extract<WSMessage, { type: "pong" }>);
+          break;
+        }
         case "chat:send": {
           const chatMsg: ChatMessage = {
             id: nanoid(),
@@ -117,9 +173,19 @@ export async function handleWS(ws: any, url: URL) {
           broadcast(roomCode, { type: "chat:message", message: chatMsg });
           break;
         }
+        case "playback_state": {
+          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
+          setPlayback(roomCode, {
+            isPlaying: msg.state === "playing",
+            currentTime: Number(msg.currentTime ?? 0),
+          });
+          break;
+        }
         case "playback:play": {
-          const isHostActive = isHostInRoom(roomCode);
-          if (isHostActive && room.hostId !== payload.sub) return;
+          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
+
+          const targetTime = Date.now() + PLAY_SCHEDULE_LEAD_MS;
+          const seekTo = Math.max(0, Number(msg.currentTime ?? 0));
 
           setPlayback(roomCode, {
             videoId: msg.videoId,
@@ -127,7 +193,8 @@ export async function handleWS(ws: any, url: URL) {
             artistName: msg.artistName ?? "",
             image: msg.image ?? "",
             isPlaying: true,
-            currentTime: msg.currentTime ?? 0,
+            currentTime: seekTo,
+            updatedAt: targetTime,
           });
 
           if (msg.videoId) {
@@ -159,33 +226,61 @@ export async function handleWS(ws: any, url: URL) {
           }
 
           broadcast(roomCode, {
-            type: "playback:play",
-            ...getPlayback(roomCode),
+            type: "room:queue_update",
+            queue: getQueue(roomCode),
+          });
+
+          broadcast(roomCode, {
+            type: "schedule_play",
+            videoId: msg.videoId,
+            seekTo,
+            targetTime,
+            id: msg.id || `room-${msg.videoId}`,
+            trackName: msg.trackName ?? "",
+            artistName: msg.artistName ?? "",
+            image: msg.image ?? "",
+            duration_ms: msg.duration_ms ?? 0,
             recentTracks: getRecentTracks(roomCode),
             queue: getQueue(roomCode),
           });
           break;
         }
         case "playback:pause": {
-          const isHostActive = isHostInRoom(roomCode);
-          if (isHostActive && room.hostId !== payload.sub) return;
+          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
+
+          const targetTime = Date.now() + CONTROL_SCHEDULE_LEAD_MS;
+          const currentPlayback = getPlayback(roomCode);
+          const pauseAt =
+            Math.max(0, Number(msg.currentTime ?? currentPlayback?.currentTime ?? 0)) +
+            ((currentPlayback?.isPlaying ?? true)
+              ? CONTROL_SCHEDULE_LEAD_MS / 1000
+              : 0);
+
           setPlayback(roomCode, {
             isPlaying: false,
-            currentTime: msg.currentTime ?? 0,
+            currentTime: pauseAt,
+            updatedAt: targetTime,
           });
           broadcast(roomCode, {
-            type: "playback:pause",
-            currentTime: msg.currentTime,
+            type: "schedule_pause",
+            targetTime,
           });
           break;
         }
         case "playback:seek": {
-          const isHostActive = isHostInRoom(roomCode);
-          if (isHostActive && room.hostId !== payload.sub) return;
-          setPlayback(roomCode, { currentTime: msg.currentTime ?? 0 });
+          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
+
+          const targetTime = Date.now() + CONTROL_SCHEDULE_LEAD_MS;
+          const seekTo = Math.max(0, Number(msg.currentTime ?? 0));
+
+          setPlayback(roomCode, {
+            currentTime: seekTo,
+            updatedAt: targetTime,
+          });
           broadcast(roomCode, {
-            type: "playback:seek",
-            currentTime: msg.currentTime,
+            type: "schedule_seek",
+            seekTo,
+            targetTime,
           });
           break;
         }

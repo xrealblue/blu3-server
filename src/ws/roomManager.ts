@@ -34,13 +34,22 @@ export interface RecentTrack {
   playedAt: number;
 }
 
+export interface QueueTrack {
+  id: string;
+  videoId: string;
+  name: string;
+  artists: { name: string }[];
+  image: string;
+  duration_ms?: number;
+}
+
 interface Room {
   code: string;
   hostId: string;
   clients: Map<string, WSClient>;
   playback: PlaybackState;
   recentTracks: RecentTrack[];
-  queue: any[];
+  queue: QueueTrack[];
 }
 
 const rooms = new Map<string, Room>();
@@ -114,10 +123,17 @@ export function isHostInRoom(code: string): boolean {
   return false;
 }
 
-export function setPlayback(code: string, state: Partial<PlaybackState>) {
+export function setPlayback(
+  code: string,
+  state: Partial<PlaybackState> & { updatedAt?: number },
+) {
   const room = rooms.get(code);
   if (!room) return;
-  room.playback = { ...room.playback, ...state, updatedAt: Date.now() };
+  room.playback = {
+    ...room.playback,
+    ...state,
+    updatedAt: state.updatedAt ?? Date.now(),
+  };
 }
 
 export function getPlayback(code: string): PlaybackState | null {
@@ -148,15 +164,6 @@ export function sendTo(socketId: string, roomCode: string, msg: object) {
       console.error("SendTo error:", err);
     }
   }
-}
-
-export interface QueueTrack {
-  id: string;
-  videoId: string;
-  name: string;
-  artists: { name: string }[];
-  image: string;
-  duration_ms?: number;
 }
 
 export function getQueue(code: string): QueueTrack[] {
