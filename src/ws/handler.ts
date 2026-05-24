@@ -29,7 +29,7 @@ import { rooms } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { pushTrackHistory } from "../db/trackHistory.js";
 
-const PLAY_SCHEDULE_LEAD_MS = 0;
+const PLAY_SCHEDULE_LEAD_MS = 1000;
 const CONTROL_SCHEDULE_LEAD_MS = 350;
 
 export type WSMessage =
