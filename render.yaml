@@ -1,9 +1,21 @@
 services:
   - type: web
     name: blu3-backend
-    runtime: node
-    buildCommand: bun install && bun run build
-    startCommand: bun run dist/index.js
+    env: node
+    buildCommand: |
+      echo "=== STARTING BUILD ==="
+      echo "Node version: $(node -v)"
+      echo "Bun version: $(bun -v)"
+      echo "Running: bun run build"
+      bun run build 2>&1 | tee build.log
+      echo "=== BUILD EXIT CODE: $? ==="
+      echo "=== FILES AFTER BUILD ==="
+      ls -laR . | head -100
+      echo "=== DIST CONTENTS ==="
+      ls -la dist/ 2>&1 || echo "❌ dist/ missing"
+      echo "=== BUILD LOG TAIL ==="
+      tail -50 build.log
+    startCommand: echo "🔍 Checking dist..." && ls -la dist/ 2>&1 && bun run dist/server.js
     envVars:
       - key: NODE_ENV
         value: production
@@ -14,4 +26,3 @@ services:
     plan: standard
     autoDeploy: true
     healthCheckPath: /health
-    preDeployCommand: bunx drizzle-kit migrate

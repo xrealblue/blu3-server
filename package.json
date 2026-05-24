@@ -3,8 +3,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --hot src/server.ts",
-    "build": "tsc && echo '✅ Build complete' && find dist -name '*.js' | head -20",
-    "start": "echo '🔍 Looking for server.js...' && find dist -name 'server.js' && bun run dist/server.js",
+    "build": "echo '🔨 Compiling with tsc...' && npx tsc && echo '✅ Build complete' && ls -la dist/",
+    "start": "echo '🚀 Starting server...' && ls -la dist/ && bun run dist/server.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:studio": "drizzle-kit studio"
