@@ -3,7 +3,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --hot src/server.ts",
-    "build": "bun build src/server.ts --outdir dist --target node --minify --entry-naming index.js",
+    "build": "tsc",
     "start": "bun run dist/index.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",

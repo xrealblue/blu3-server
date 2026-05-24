@@ -1,7 +1,7 @@
 services:
   - type: web
     name: blu3-backend
-    env: node
+    runtime: node
     buildCommand: bun install && bun run build
     startCommand: bun run dist/index.js
     envVars:

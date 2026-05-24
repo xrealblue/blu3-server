@@ -1,7 +1,7 @@
 // db/trackHistory.ts  (new file)
 import { db } from "./index.js";
 import { roomTrackHistory } from "./schema.js";
-import { eq, asc, lt } from "drizzle-orm";
+import { eq, asc } from "drizzle-orm";
 export async function pushTrackHistory(roomId, track) {
     // 1. Insert the new track
     await db.insert(roomTrackHistory).values({
