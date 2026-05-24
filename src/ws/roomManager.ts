@@ -43,11 +43,19 @@ export interface QueueTrack {
   duration_ms?: number;
 }
 
+export type RepeatMode = "off" | "all" | "one";
+
+export interface PlaybackMode {
+  shuffle: boolean;
+  repeatMode: RepeatMode;
+}
+
 interface Room {
   code: string;
   hostId: string;
   clients: Map<string, WSClient>;
   playback: PlaybackState;
+  playbackMode: PlaybackMode;
   recentTracks: RecentTrack[];
   queue: QueueTrack[];
 }
@@ -68,6 +76,10 @@ export function getOrCreateRoom(code: string, hostId: string): Room {
         isPlaying: false,
         currentTime: 0,
         updatedAt: Date.now(),
+      },
+      playbackMode: {
+        shuffle: false,
+        repeatMode: "off",
       },
       recentTracks: [],
       queue: [],
@@ -140,6 +152,24 @@ export function getPlayback(code: string): PlaybackState | null {
   return rooms.get(code)?.playback ?? null;
 }
 
+export function getPlaybackMode(code: string): PlaybackMode {
+  return (
+    rooms.get(code)?.playbackMode ?? {
+      shuffle: false,
+      repeatMode: "off",
+    }
+  );
+}
+
+export function setPlaybackMode(code: string, mode: Partial<PlaybackMode>) {
+  const room = rooms.get(code);
+  if (!room) return;
+  room.playbackMode = {
+    ...room.playbackMode,
+    ...mode,
+  };
+}
+
 export function broadcast(code: string, msg: object, excludeId?: string) {
   const room = rooms.get(code);
   if (!room) return;
@@ -191,6 +221,15 @@ export function insertQueueTop(code: string, track: QueueTrack) {
   );
   // Add to index 0
   room.queue.unshift(track);
+}
+
+export function moveQueueTrackToEnd(code: string, trackId: string) {
+  const room = rooms.get(code);
+  if (!room) return;
+  const track = room.queue.find((item) => item.id === trackId);
+  if (!track) return;
+  room.queue = room.queue.filter((item) => item.id !== trackId);
+  room.queue.push(track);
 }
 
 export function clearQueue(code: string) {

@@ -17,7 +17,11 @@ import {
   addToQueue,
   removeFromQueue,
   insertQueueTop,
+  getPlaybackMode,
+  setPlaybackMode,
+  moveQueueTrackToEnd,
   type QueueTrack,
+  type RepeatMode,
 } from "./roomManager.js";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
@@ -56,9 +60,11 @@ type IncomingMessage =
     }
   | { type: "playback:pause"; currentTime?: number }
   | { type: "playback:seek"; currentTime?: number }
+  | { type: "playback:mode"; shuffle?: boolean; repeatMode?: RepeatMode }
   | { type: "playback:sync_request" }
   | { type: "queue:add"; track: QueueTrack }
-  | { type: "queue:remove"; trackId: string };
+  | { type: "queue:remove"; trackId: string }
+  | { type: "queue:cycle_current"; trackId: string };
 
 function canControlPlayback(roomCode: string, hostId: string, userId: string) {
   const isHostActive = isHostInRoom(roomCode);
@@ -126,6 +132,7 @@ export async function handleWS(ws: any, url: URL) {
       isHost: room.hostId === payload.sub,
       members: getRoomMembers(roomCode),
       playback: getPlayback(roomCode),
+      playbackMode: getPlaybackMode(roomCode),
       recentTracks: getRecentTracks(roomCode),
       queue: getQueue(roomCode),
     }),
@@ -284,10 +291,25 @@ export async function handleWS(ws: any, url: URL) {
           });
           break;
         }
+        case "playback:mode": {
+          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
+          setPlaybackMode(roomCode, {
+            ...(typeof msg.shuffle === "boolean"
+              ? { shuffle: msg.shuffle }
+              : {}),
+            ...(msg.repeatMode ? { repeatMode: msg.repeatMode } : {}),
+          });
+          broadcast(roomCode, {
+            type: "room:playback_mode",
+            playbackMode: getPlaybackMode(roomCode),
+          });
+          break;
+        }
         case "playback:sync_request": {
           sendTo(socketId, roomCode, {
             type: "playback:sync",
             ...getPlayback(roomCode),
+            playbackMode: getPlaybackMode(roomCode),
             recentTracks: getRecentTracks(roomCode),
             queue: getQueue(roomCode),
           });
@@ -303,6 +325,15 @@ export async function handleWS(ws: any, url: URL) {
         }
         case "queue:remove": {
           removeFromQueue(roomCode, msg.trackId);
+          broadcast(roomCode, {
+            type: "room:queue_update",
+            queue: getQueue(roomCode),
+          });
+          break;
+        }
+        case "queue:cycle_current": {
+          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
+          moveQueueTrackToEnd(roomCode, msg.trackId);
           broadcast(roomCode, {
             type: "room:queue_update",
             queue: getQueue(roomCode),
