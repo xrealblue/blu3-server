@@ -1,10 +1,16 @@
 import { verify } from "hono/jwt";
-import { getOrCreateRoom, addClient, removeClient, broadcast, sendTo, getRoomMembers, setPlayback, getPlayback, isHostInRoom, getRecentTracks, pushRecentTrack, getQueue, addToQueue, removeFromQueue, insertQueueTop, } from "./roomManager.js";
+import { getOrCreateRoom, addClient, removeClient, broadcast, sendTo, getRoomMembers, setPlayback, getPlayback, isHostInRoom, getRecentTracks, pushRecentTrack, getQueue, addToQueue, removeFromQueue, insertQueueTop, getPlaybackMode, setPlaybackMode, moveQueueTrackToEnd, } from "./roomManager.js";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
 import { rooms } from "../db/schema.js";
 import { eq } from "drizzle-orm";
-import { getTrackHistory, pushTrackHistory } from "../db/trackHistory.js";
+import { pushTrackHistory } from "../db/trackHistory.js";
+const PLAY_SCHEDULE_LEAD_MS = 1500;
+const CONTROL_SCHEDULE_LEAD_MS = 350;
+function canControlPlayback(roomCode, hostId, userId) {
+    const isHostActive = isHostInRoom(roomCode);
+    return !isHostActive || hostId === userId;
+}
 export async function handleWS(ws, url) {
     const token = url.searchParams.get("token");
     const roomCode = url.searchParams.get("room")?.toUpperCase();
@@ -45,11 +51,16 @@ export async function handleWS(ws, url) {
     const room = getOrCreateRoom(roomCode, dbRoom.hostId);
     addClient(client);
     ws.send(JSON.stringify({
+        type: "clock_sync",
+        serverTime: Date.now(),
+    }));
+    ws.send(JSON.stringify({
         type: "room:joined",
         roomCode,
         isHost: room.hostId === payload.sub,
         members: getRoomMembers(roomCode),
         playback: getPlayback(roomCode),
+        playbackMode: getPlaybackMode(roomCode),
         recentTracks: getRecentTracks(roomCode),
         queue: getQueue(roomCode),
     }));
@@ -70,6 +81,14 @@ export async function handleWS(ws, url) {
                 return;
             }
             switch (msg.type) {
+                case "ping": {
+                    sendTo(socketId, roomCode, {
+                        type: "pong",
+                        serverTime: Date.now(),
+                        rtt: 0,
+                    });
+                    break;
+                }
                 case "chat:send": {
                     const chatMsg = {
                         id: nanoid(),
@@ -82,17 +101,28 @@ export async function handleWS(ws, url) {
                     broadcast(roomCode, { type: "chat:message", message: chatMsg });
                     break;
                 }
-                case "playback:play": {
-                    const isHostActive = isHostInRoom(roomCode);
-                    if (isHostActive && room.hostId !== payload.sub)
+                case "playback_state": {
+                    if (!canControlPlayback(roomCode, room.hostId, payload.sub))
                         return;
+                    setPlayback(roomCode, {
+                        isPlaying: msg.state === "playing",
+                        currentTime: Number(msg.currentTime ?? 0),
+                    });
+                    break;
+                }
+                case "playback:play": {
+                    if (!canControlPlayback(roomCode, room.hostId, payload.sub))
+                        return;
+                    const targetTime = Date.now() + PLAY_SCHEDULE_LEAD_MS;
+                    const seekTo = Math.max(0, Number(msg.currentTime ?? 0));
                     setPlayback(roomCode, {
                         videoId: msg.videoId,
                         trackName: msg.trackName ?? "",
                         artistName: msg.artistName ?? "",
                         image: msg.image ?? "",
                         isPlaying: true,
-                        currentTime: msg.currentTime ?? 0,
+                        currentTime: seekTo,
+                        updatedAt: targetTime,
                     });
                     if (msg.videoId) {
                         pushTrackHistory(dbRoom.id, {
@@ -120,35 +150,72 @@ export async function handleWS(ws, url) {
                         insertQueueTop(roomCode, queueTrack);
                     }
                     broadcast(roomCode, {
-                        type: "playback:play",
-                        ...getPlayback(roomCode),
+                        type: "room:queue_update",
+                        queue: getQueue(roomCode),
+                    });
+                    broadcast(roomCode, {
+                        type: "schedule_play",
+                        videoId: msg.videoId,
+                        seekTo,
+                        targetTime,
+                        id: msg.id || `room-${msg.videoId}`,
+                        trackName: msg.trackName ?? "",
+                        artistName: msg.artistName ?? "",
+                        image: msg.image ?? "",
+                        duration_ms: msg.duration_ms ?? 0,
                         recentTracks: getRecentTracks(roomCode),
                         queue: getQueue(roomCode),
                     });
                     break;
                 }
                 case "playback:pause": {
-                    const isHostActive = isHostInRoom(roomCode);
-                    if (isHostActive && room.hostId !== payload.sub)
+                    if (!canControlPlayback(roomCode, room.hostId, payload.sub))
                         return;
+                    const targetTime = Date.now() + CONTROL_SCHEDULE_LEAD_MS;
+                    const currentPlayback = getPlayback(roomCode);
+                    const pauseAt = Math.max(0, Number(msg.currentTime ?? currentPlayback?.currentTime ?? 0)) +
+                        ((currentPlayback?.isPlaying ?? true)
+                            ? CONTROL_SCHEDULE_LEAD_MS / 1000
+                            : 0);
                     setPlayback(roomCode, {
                         isPlaying: false,
-                        currentTime: msg.currentTime ?? 0,
+                        currentTime: pauseAt,
+                        updatedAt: targetTime,
                     });
                     broadcast(roomCode, {
-                        type: "playback:pause",
-                        currentTime: msg.currentTime,
+                        type: "schedule_pause",
+                        targetTime,
                     });
                     break;
                 }
                 case "playback:seek": {
-                    const isHostActive = isHostInRoom(roomCode);
-                    if (isHostActive && room.hostId !== payload.sub)
+                    if (!canControlPlayback(roomCode, room.hostId, payload.sub))
                         return;
-                    setPlayback(roomCode, { currentTime: msg.currentTime ?? 0 });
+                    const targetTime = Date.now() + CONTROL_SCHEDULE_LEAD_MS;
+                    const seekTo = Math.max(0, Number(msg.currentTime ?? 0));
+                    setPlayback(roomCode, {
+                        currentTime: seekTo,
+                        updatedAt: targetTime,
+                    });
                     broadcast(roomCode, {
-                        type: "playback:seek",
-                        currentTime: msg.currentTime,
+                        type: "schedule_seek",
+                        seekTo,
+                        targetTime,
+                    });
+                    break;
+                }
+                case "playback:mode": {
+                    if (!canControlPlayback(roomCode, room.hostId, payload.sub))
+                        return;
+                    setPlaybackMode(roomCode, {
+                        ...(typeof msg.shuffle === "boolean"
+                            ? { shuffle: msg.shuffle }
+                            : {}),
+                        ...(msg.repeatMode ? { repeatMode: msg.repeatMode } : {}),
+                    });
+                    broadcast(roomCode, {
+                        type: "room:playback_mode",
+                        playbackMode: getPlaybackMode(roomCode),
                     });
                     break;
                 }
@@ -156,6 +223,7 @@ export async function handleWS(ws, url) {
                     sendTo(socketId, roomCode, {
                         type: "playback:sync",
                         ...getPlayback(roomCode),
+                        playbackMode: getPlaybackMode(roomCode),
                         recentTracks: getRecentTracks(roomCode),
                         queue: getQueue(roomCode),
                     });
@@ -171,6 +239,16 @@ export async function handleWS(ws, url) {
                 }
                 case "queue:remove": {
                     removeFromQueue(roomCode, msg.trackId);
+                    broadcast(roomCode, {
+                        type: "room:queue_update",
+                        queue: getQueue(roomCode),
+                    });
+                    break;
+                }
+                case "queue:cycle_current": {
+                    if (!canControlPlayback(roomCode, room.hostId, payload.sub))
+                        return;
+                    moveQueueTrackToEnd(roomCode, msg.trackId);
                     broadcast(roomCode, {
                         type: "room:queue_update",
                         queue: getQueue(roomCode),

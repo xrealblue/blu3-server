@@ -14,6 +14,10 @@ export function getOrCreateRoom(code, hostId) {
                 currentTime: 0,
                 updatedAt: Date.now(),
             },
+            playbackMode: {
+                shuffle: false,
+                repeatMode: "off",
+            },
             recentTracks: [],
             queue: [],
         });
@@ -70,10 +74,29 @@ export function setPlayback(code, state) {
     const room = rooms.get(code);
     if (!room)
         return;
-    room.playback = { ...room.playback, ...state, updatedAt: Date.now() };
+    room.playback = {
+        ...room.playback,
+        ...state,
+        updatedAt: state.updatedAt ?? Date.now(),
+    };
 }
 export function getPlayback(code) {
     return rooms.get(code)?.playback ?? null;
+}
+export function getPlaybackMode(code) {
+    return (rooms.get(code)?.playbackMode ?? {
+        shuffle: false,
+        repeatMode: "off",
+    });
+}
+export function setPlaybackMode(code, mode) {
+    const room = rooms.get(code);
+    if (!room)
+        return;
+    room.playbackMode = {
+        ...room.playbackMode,
+        ...mode,
+    };
 }
 export function broadcast(code, msg, excludeId) {
     const room = rooms.get(code);
@@ -126,6 +149,16 @@ export function insertQueueTop(code, track) {
     room.queue = room.queue.filter((t) => t.id !== track.id && t.videoId !== track.videoId);
     // Add to index 0
     room.queue.unshift(track);
+}
+export function moveQueueTrackToEnd(code, trackId) {
+    const room = rooms.get(code);
+    if (!room)
+        return;
+    const track = room.queue.find((item) => item.id === trackId);
+    if (!track)
+        return;
+    room.queue = room.queue.filter((item) => item.id !== trackId);
+    room.queue.push(track);
 }
 export function clearQueue(code) {
     const room = rooms.get(code);

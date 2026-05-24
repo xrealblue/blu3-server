@@ -8,7 +8,6 @@ import { WebSocketServer } from "ws";
 import YTMusic from "ytmusic-api";
 import authRoute from "./routes/auth.js";
 import roomsRoute from "./routes/rooms.js";
-import streamRoute from "./routes/stream.js";
 import { handleWS } from "./ws/handler.js";
 let ytmusic = null;
 async function getYTMusic() {
@@ -30,7 +29,6 @@ app.use("*", cors({
 app.get("/", (c) => c.json({ status: "ok", service: "blu3-api" }));
 app.route("/auth", authRoute);
 app.route("/api/rooms", roomsRoute);
-app.route("/api/stream", streamRoute);
 app.get("/ws", upgradeWebSocket((c) => {
     let handlers = null;
     return {
