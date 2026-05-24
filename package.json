@@ -2,9 +2,9 @@
   "name": "blu3-server",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
+    "dev": "bun run --hot src/server.ts",
+    "build": "bun build src/server.ts --outdir dist --target node",
+    "start": "node dist/server.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:studio": "drizzle-kit studio"

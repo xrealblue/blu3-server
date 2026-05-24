@@ -1,0 +1,16 @@
+services:
+  - type: web
+    runtime: node
+    name: blu3-backend
+    buildCommand: bun install && bun run build
+    startCommand: node dist/server.js # ← Match your actual output
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: PORT
+        value: 3001
+    plan: standard
+    autoDeploy: true
+    healthCheckPath: /health
