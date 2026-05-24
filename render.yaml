@@ -2,8 +2,9 @@ services:
   - type: web
     name: blu3-server
     env: node
-    buildCommand: npm install && npm run build
-    startCommand: npm run start
+    rootDir: blu3-server
+    buildCommand: bun install --frozen-lockfile && bun run build
+    startCommand: bun run start
     envVars:
       - key: NODE_ENV
         value: production
