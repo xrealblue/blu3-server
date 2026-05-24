@@ -1,12 +1,18 @@
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { db } from "../db/index.js";
 import { rooms, roomMembers, users } from "../db/schema.js";
 import { eq, and } from "drizzle-orm";
 import { verify } from "hono/jwt";
 
-const roomsRoute = new Hono();
+type RoomsEnv = {
+  Variables: {
+    userId: string;
+  };
+};
 
-async function requireAuth(c: any, next: any) {
+const roomsRoute = new Hono<RoomsEnv>();
+
+const requireAuth: MiddlewareHandler<RoomsEnv> = async (c, next) => {
   const header = c.req.header("Authorization");
   if (!header?.startsWith("Bearer "))
     return c.json({ error: "Unauthorized" }, 401);
@@ -22,7 +28,7 @@ async function requireAuth(c: any, next: any) {
     console.error("Room auth error:", err);
     return c.json({ error: "Invalid token" }, 401);
   }
-}
+};
 
 // Generate random room code
 function genCode(len = 6) {

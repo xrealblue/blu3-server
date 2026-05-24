@@ -1,13 +1,19 @@
 {
   "name": "blu3-server",
+  "version": "0.1.0",
+  "private": true,
   "type": "module",
+  "main": "dist/index.js",
   "scripts": {
-    "dev": "bun run --hot src/server.ts",
-    "build": "echo '🔨 Compiling with tsc...' && npx tsc && echo '✅ Build complete' && ls -la dist/",
-    "start": "echo '🚀 Starting server...' && ls -la dist/ && bun run dist/server.js",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:studio": "drizzle-kit studio"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.3",

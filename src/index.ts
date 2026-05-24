@@ -33,6 +33,7 @@ app.use(
 );
 
 app.get("/", (c) => c.json({ status: "ok", service: "blu3-api" }));
+app.get("/health", (c) => c.json({ status: "ok" }));
 app.route("/auth", authRoute);
 app.route("/api/rooms", roomsRoute);
 
