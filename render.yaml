@@ -1,9 +1,9 @@
 services:
   - type: web
-    runtime: node
     name: blu3-backend
+    env: node
     buildCommand: bun install && bun run build
-    startCommand: bun run ./dist/server.js
+    startCommand: bun run dist/index.js
     envVars:
       - key: NODE_ENV
         value: production
@@ -14,3 +14,4 @@ services:
     plan: standard
     autoDeploy: true
     healthCheckPath: /health
+    preDeployCommand: bunx drizzle-kit migrate
