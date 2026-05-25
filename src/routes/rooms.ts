@@ -124,7 +124,7 @@ roomsRoute.delete("/:code", requireAuth, async (c) => {
 });
 
 // GET /api/rooms/user/mine — all rooms for current user
-roomsRoute.get("/user/mine", async (c) => {
+roomsRoute.get("/user/mine", requireAuth, async (c) => {
   const userId = c.get("userId");
 
   const myRooms = await db

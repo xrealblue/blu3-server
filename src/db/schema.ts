@@ -5,6 +5,7 @@ import {
   uuid,
   boolean,
   index,
+  integer,
 } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
@@ -59,7 +60,29 @@ export const roomTrackHistory = pgTable(
   ],
 );
 
+export const roomQueue = pgTable(
+  "room_queue",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    roomId: uuid("room_id")
+      .notNull()
+      .references(() => rooms.id, { onDelete: "cascade" }),
+    videoId: text("video_id").notNull(),
+    trackName: text("track_name").notNull(),
+    artistName: text("artist_name").notNull(),
+    image: text("image").notNull().default(""),
+    durationMs: integer("duration_ms").notNull().default(0),
+    position: integer("position").notNull().default(0),
+    addedAt: timestamp("added_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("rq_room_idx").on(t.roomId),
+    index("rq_position_idx").on(t.position),
+  ],
+);
+
 export type RoomTrackHistory = typeof roomTrackHistory.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type Room = typeof rooms.$inferSelect;
 export type RoomMember = typeof roomMembers.$inferSelect;
+export type RoomQueue = typeof roomQueue.$inferSelect;
