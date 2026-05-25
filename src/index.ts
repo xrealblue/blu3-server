@@ -19,14 +19,25 @@ async function getYTMusic(): Promise<YTMusic> {
 }
 getYTMusic().catch(console.error);
 
+const getCorsOrigins = (): string[] => {
+  const originsEnv = process.env.CORS_ORIGINS;
+  if (!originsEnv) {
+    return [process.env.FRONTEND_URL ?? "http://localhost:3000"];
+  }
+  return originsEnv
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+};
+
 const app = new Hono();
 
 app.use("*", logger());
 app.use(
   "*",
   cors({
-    origin: [process.env.FRONTEND_URL ?? "http://localhost:3000"],
-    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+    origin: getCorsOrigins(),
+    allowMethods: ["GET", "POST", "DELETE", "OPTIONS", "PUT"], // Added PUT/PATCH if needed
     allowHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   }),
