@@ -26,8 +26,8 @@ import {
 } from "./roomManager.js";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
-import { rooms } from "../db/schema.js";
-import { eq } from "drizzle-orm";
+import { rooms, roomQueue } from "../db/schema.js";
+import { eq, asc } from "drizzle-orm";
 import { pushTrackHistory } from "../db/trackHistory.js";
 
 const DEFAULT_PLAY_SCHEDULE_LEAD_MS = 400;
@@ -89,6 +89,34 @@ function canControlPlayback(roomCode: string, hostId: string, userId: string) {
   return !isHostActive || hostId === userId;
 }
 
+async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
+  try {
+    // 1. Delete all existing queue tracks for the room
+    await db.delete(roomQueue).where(eq(roomQueue.roomId, roomId));
+
+    // 2. Insert all current tracks with their position indices
+    if (queue.length > 0) {
+      await db.insert(roomQueue).values(
+        queue.map((track, index) => {
+          const isValidUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(track.id);
+          return {
+            id: isValidUuid ? track.id : undefined,
+            roomId,
+            videoId: track.videoId,
+            trackName: track.name,
+            artistName: track.artists?.[0]?.name ?? "Unknown",
+            image: track.image ?? "",
+            durationMs: track.duration_ms ?? 0,
+            position: index,
+          };
+        })
+      );
+    }
+  } catch (err) {
+    console.error("Failed to sync queue to database:", err);
+  }
+}
+
 export async function handleWS(ws: any, url: URL) {
   const token = url.searchParams.get("token");
   const roomCode = url.searchParams.get("room")?.toUpperCase();
@@ -136,6 +164,28 @@ export async function handleWS(ws: any, url: URL) {
   const room = getOrCreateRoom(roomCode, dbRoom.hostId);
   addClient(client);
 
+  if (!room.isQueueLoaded) {
+    try {
+      const dbQueue = await db
+        .select()
+        .from(roomQueue)
+        .where(eq(roomQueue.roomId, dbRoom.id))
+        .orderBy(asc(roomQueue.position));
+
+      room.queue = dbQueue.map((item) => ({
+        id: item.id,
+        videoId: item.videoId,
+        name: item.trackName,
+        artists: [{ name: item.artistName }],
+        image: item.image,
+        duration_ms: item.durationMs,
+      }));
+      room.isQueueLoaded = true;
+    } catch (err) {
+      console.error("Failed to load queue from database:", err);
+    }
+  }
+
   ws.send(
     JSON.stringify({
       type: "clock_sync",
@@ -168,7 +218,7 @@ export async function handleWS(ws: any, url: URL) {
 
   // ← return handlers, no addEventListener
   return {
-    onMessage(event: any) {
+    async onMessage(event: any) {
       let msg: IncomingMessage;
       try {
         const raw = typeof event.data === "string" ? event.data : event;
@@ -240,13 +290,15 @@ export async function handleWS(ws: any, url: URL) {
               playedAt: Date.now(),
             });
 
-            // Evict from queue
-            removeFromQueue(roomCode, `room-${currentPlayback.videoId}`);
+            // Move old song to bottom of queue
             const roomObj = getOrCreateRoom(roomCode, dbRoom.hostId);
             if (roomObj) {
-              roomObj.queue = roomObj.queue.filter(
-                (t) => t.videoId !== currentPlayback.videoId
-              );
+              const currentTrackIndex = roomObj.queue.findIndex(t => t.videoId === currentPlayback.videoId);
+              if (currentTrackIndex !== -1) {
+                const track = roomObj.queue[currentTrackIndex];
+                roomObj.queue.splice(currentTrackIndex, 1);
+                roomObj.queue.push(track);
+              }
             }
           }
 
@@ -272,6 +324,8 @@ export async function handleWS(ws: any, url: URL) {
             };
             insertQueueTop(roomCode, queueTrack);
           }
+
+          await syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
 
           broadcast(roomCode, {
             type: "room:queue_update",
@@ -403,6 +457,7 @@ export async function handleWS(ws: any, url: URL) {
             type: "room:queue_update",
             queue: getQueue(roomCode),
           });
+          await syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
           break;
         }
         case "queue:remove": {
@@ -411,6 +466,7 @@ export async function handleWS(ws: any, url: URL) {
             type: "room:queue_update",
             queue: getQueue(roomCode),
           });
+          await syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
           break;
         }
         case "queue:cycle_current": {
@@ -420,6 +476,7 @@ export async function handleWS(ws: any, url: URL) {
             type: "room:queue_update",
             queue: getQueue(roomCode),
           });
+          await syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
           break;
         }
         case "queue:clear": {
@@ -428,6 +485,7 @@ export async function handleWS(ws: any, url: URL) {
             type: "room:queue_update",
             queue: getQueue(roomCode),
           });
+          await syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
           break;
         }
       }

@@ -58,6 +58,7 @@ interface Room {
   playbackMode: PlaybackMode;
   recentTracks: RecentTrack[];
   queue: QueueTrack[];
+  isQueueLoaded?: boolean;
 }
 
 const rooms = new Map<string, Room>();
@@ -83,6 +84,7 @@ export function getOrCreateRoom(code: string, hostId: string): Room {
       },
       recentTracks: [],
       queue: [],
+      isQueueLoaded: false,
     });
   }
   return rooms.get(code)!;

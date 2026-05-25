@@ -1,7 +1,7 @@
 import { Hono, type MiddlewareHandler } from "hono";
 import { db } from "../db/index.js";
-import { rooms, roomMembers, users } from "../db/schema.js";
-import { eq, and } from "drizzle-orm";
+import { rooms, roomMembers, users, roomTrackHistory } from "../db/schema.js";
+import { eq, and, desc } from "drizzle-orm";
 import { verify } from "hono/jwt";
 
 type RoomsEnv = {
@@ -105,7 +105,7 @@ roomsRoute.post("/:code/join", requireAuth, async (c) => {
   return c.json({ room, joined: true });
 });
 
-// DELETE /api/rooms/:code — close room (host only)
+// DELETE /api/rooms/:code — delete room (host only)
 roomsRoute.delete("/:code", requireAuth, async (c) => {
   const userId = c.get("userId");
   const code = c.req.param("code").toUpperCase();
@@ -117,9 +117,28 @@ roomsRoute.delete("/:code", requireAuth, async (c) => {
     .limit(1);
   if (!room) return c.json({ error: "Room not found" }, 404);
   if (room.hostId !== userId)
-    return c.json({ error: "Only host can close room" }, 403);
+    return c.json({ error: "Only host can delete room" }, 403);
 
-  await db.update(rooms).set({ isActive: false }).where(eq(rooms.id, room.id));
+  await db.delete(rooms).where(eq(rooms.id, room.id));
+  return c.json({ success: true });
+});
+
+// POST /api/rooms/:code/leave — leave room (non-host removes membership)
+roomsRoute.post("/:code/leave", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const code = c.req.param("code").toUpperCase();
+
+  const [room] = await db
+    .select()
+    .from(rooms)
+    .where(eq(rooms.code, code))
+    .limit(1);
+  if (!room) return c.json({ error: "Room not found" }, 404);
+
+  await db
+    .delete(roomMembers)
+    .where(and(eq(roomMembers.roomId, room.id), eq(roomMembers.userId, userId)));
+
   return c.json({ success: true });
 });
 
@@ -141,7 +160,28 @@ roomsRoute.get("/user/mine", requireAuth, async (c) => {
     .where(eq(roomMembers.userId, userId))
     .orderBy(rooms.createdAt);
 
-  return c.json({ rooms: myRooms });
+  const roomsWithLastTrack = await Promise.all(
+    myRooms.map(async (r) => {
+      const [lastTrack] = await db
+        .select({
+          videoId: roomTrackHistory.videoId,
+          trackName: roomTrackHistory.trackName,
+          artistName: roomTrackHistory.artistName,
+          image: roomTrackHistory.image,
+        })
+        .from(roomTrackHistory)
+        .where(eq(roomTrackHistory.roomId, r.id))
+        .orderBy(desc(roomTrackHistory.playedAt))
+        .limit(1);
+
+      return {
+        ...r,
+        lastTrack: lastTrack ?? null,
+      };
+    })
+  );
+
+  return c.json({ rooms: roomsWithLastTrack });
 });
 
 export default roomsRoute;
