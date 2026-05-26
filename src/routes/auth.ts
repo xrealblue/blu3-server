@@ -98,8 +98,24 @@ auth.get("/google/callback", async (c) => {
       "HS256",
     );
 
+    const rawFrontendUrl = process.env.FRONTEND_URL ?? "http://localhost:3000";
+    const cleanFrontendUrl = rawFrontendUrl.replace(/^"|"$/g, "");
+    const frontendUrls = cleanFrontendUrl
+      .split(",")
+      .map((url) => url.trim().replace(/\/$/, ""))
+      .filter(Boolean);
+
+    let targetFrontend = frontendUrls[0] || "http://localhost:3000";
+    const referer = c.req.header("Referer") || c.req.header("Origin") || "";
+    if (referer) {
+      const matched = frontendUrls.find((url) => referer.startsWith(url));
+      if (matched) {
+        targetFrontend = matched;
+      }
+    }
+
     return c.redirect(
-      `${process.env.FRONTEND_URL}/auth/callback?token=${token}`,
+      `${targetFrontend}/auth/callback?token=${token}`,
     );
   } catch (err) {
     console.error("Auth callback error:", err);
