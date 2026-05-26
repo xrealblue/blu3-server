@@ -8,6 +8,7 @@ import { WebSocketServer } from "ws";
 import YTMusic from "ytmusic-api";
 import authRoute from "./routes/auth.js";
 import roomsRoute from "./routes/rooms.js";
+import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 
 let ytmusic: YTMusic | null = null;
@@ -47,6 +48,7 @@ app.get("/", (c) => c.json({ status: "ok", service: "blu3-api" }));
 app.get("/health", (c) => c.json({ status: "ok" }));
 app.route("/auth", authRoute);
 app.route("/api/rooms", roomsRoute);
+app.route("/api/playlists", playlistsRoute);
 
 app.get(
   "/ws",
