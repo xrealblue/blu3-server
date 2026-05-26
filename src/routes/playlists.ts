@@ -127,9 +127,28 @@ async function resolveSpotifyTrackToYouTube(
   const query = `${trackName} ${artistName}`;
   const apiKey = process.env.YOUTUBE_API_KEY;
 
+  // 1. Prioritize ytmusic-api to get high quality square track/album art
+  try {
+    const results = await ytmusic.searchSongs(query);
+    const song = results[0];
+    if (song && song.videoId) {
+      const thumbs = song.thumbnails ?? [];
+      const rawThumb = thumbs[thumbs.length - 1]?.url ?? "";
+      const image = rawThumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj");
+      return {
+        videoId: song.videoId,
+        image,
+        durationMs: (song.duration ?? 0) * 1000 || 180000,
+      };
+    }
+  } catch (err) {
+    console.error("ytmusic-api search failed, trying YouTube API:", err);
+  }
+
+  // 2. Fallback to regular YouTube Search API if ytmusic fails or has no tracks
   if (apiKey) {
     try {
-      // 1. Search YouTube v3 API
+      // Search YouTube v3 API
       const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&key=${apiKey}&maxResults=1`;
       const searchRes = await fetch(searchUrl);
       const searchData = await searchRes.json();
@@ -139,7 +158,7 @@ async function resolveSpotifyTrackToYouTube(
         const videoId = videoItem.id.videoId;
         const image = videoItem.snippet.thumbnails?.high?.url || videoItem.snippet.thumbnails?.default?.url || "";
 
-        // 2. Fetch duration details
+        // Fetch duration details
         const detailsUrl = `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoId}&key=${apiKey}`;
         const detailsRes = await fetch(detailsUrl);
         const detailsData = await detailsRes.json();
@@ -153,26 +172,8 @@ async function resolveSpotifyTrackToYouTube(
         return { videoId, image, durationMs };
       }
     } catch (err) {
-      console.error("YouTube Search API failed, falling back to ytmusic-api:", err);
+      console.error("YouTube Search API failed:", err);
     }
-  }
-
-  // Fallback to ytmusic-api scraping
-  try {
-    const results = await ytmusic.searchSongs(query);
-    const song = results[0];
-    if (song) {
-      const thumbs = song.thumbnails ?? [];
-      const rawThumb = thumbs[thumbs.length - 1]?.url ?? "";
-      const image = rawThumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj");
-      return {
-        videoId: song.videoId,
-        image,
-        durationMs: (song.duration ?? 0) * 1000 || 180000,
-      };
-    }
-  } catch (err) {
-    console.error("ytmusic-api fallback failed for query:", query, err);
   }
 
   return { videoId: "", image: "", durationMs: 0 };
