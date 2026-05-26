@@ -554,4 +554,113 @@ playlistsRoute.post("/import", async (c) => {
   }
 });
 
+// DELETE /api/playlists/:id/tracks/:trackId — Delete a track from a custom playlist
+playlistsRoute.delete("/:id/tracks/:trackId", async (c) => {
+  const userId = c.get("userId");
+  const playlistId = c.req.param("id");
+  const trackId = c.req.param("trackId");
+
+  try {
+    const [playlist] = await db
+      .select()
+      .from(playlists)
+      .where(and(eq(playlists.id, playlistId), eq(playlists.userId, userId)))
+      .limit(1);
+
+    if (!playlist) return c.json({ error: "Playlist not found" }, 404);
+
+    await db
+      .delete(playlistTracks)
+      .where(and(eq(playlistTracks.playlistId, playlistId), eq(playlistTracks.id, trackId)));
+
+    return c.json({ success: true });
+  } catch (err) {
+    console.error("Failed to delete track from playlist:", err);
+    return c.json({ error: "Failed to delete track" }, 500);
+  }
+});
+
+// POST /api/playlists/:id/tracks — Add a track to a custom playlist
+playlistsRoute.post("/:id/tracks", async (c) => {
+  const userId = c.get("userId");
+  const playlistId = c.req.param("id");
+  const { videoId, trackName, artistName, image, durationMs } = await c.req.json();
+
+  if (!videoId || !trackName) {
+    return c.json({ error: "videoId and trackName are required" }, 400);
+  }
+
+  try {
+    const [playlist] = await db
+      .select()
+      .from(playlists)
+      .where(and(eq(playlists.id, playlistId), eq(playlists.userId, userId)))
+      .limit(1);
+
+    if (!playlist) return c.json({ error: "Playlist not found" }, 404);
+
+    const [maxPos] = await db
+      .select({ pos: playlistTracks.position })
+      .from(playlistTracks)
+      .where(eq(playlistTracks.playlistId, playlistId))
+      .orderBy(desc(playlistTracks.position))
+      .limit(1);
+
+    const nextPos = (maxPos?.pos ?? -1) + 1;
+
+    const [newTrack] = await db
+      .insert(playlistTracks)
+      .values({
+        playlistId,
+        videoId,
+        trackName,
+        artistName: artistName || "Unknown Artist",
+        image: image || "",
+        durationMs: durationMs || 0,
+        position: nextPos,
+      })
+      .returning();
+
+    return c.json({ track: newTrack });
+  } catch (err) {
+    console.error("Failed to add track to playlist:", err);
+    return c.json({ error: "Failed to add track" }, 500);
+  }
+});
+
+// PUT /api/playlists/:id/tracks/reorder — Reorder tracks in a playlist
+playlistsRoute.put("/:id/tracks/reorder", async (c) => {
+  const userId = c.get("userId");
+  const playlistId = c.req.param("id");
+  const { trackIds } = await c.req.json();
+
+  if (!Array.isArray(trackIds)) {
+    return c.json({ error: "trackIds array is required" }, 400);
+  }
+
+  try {
+    const [playlist] = await db
+      .select()
+      .from(playlists)
+      .where(and(eq(playlists.id, playlistId), eq(playlists.userId, userId)))
+      .limit(1);
+
+    if (!playlist) return c.json({ error: "Playlist not found" }, 404);
+
+    await Promise.all(
+      trackIds.map(async (trackId: string, idx: number) => {
+        await db
+          .update(playlistTracks)
+          .set({ position: idx })
+          .where(and(eq(playlistTracks.playlistId, playlistId), eq(playlistTracks.id, trackId)));
+      })
+    );
+
+    return c.json({ success: true });
+  } catch (err) {
+    console.error("Failed to reorder playlist tracks:", err);
+    return c.json({ error: "Failed to reorder tracks" }, 500);
+  }
+});
+
 export default playlistsRoute;
