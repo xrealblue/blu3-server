@@ -81,6 +81,43 @@ async function getSpotifyAccessToken(clientId: string, clientSecret: string): Pr
   }
 }
 
+interface ScrapedSpotifyTrack {
+  trackName: string;
+  artistName: string;
+}
+
+async function getSpotifyPlaylistTracksViaEmbed(playlistId: string): Promise<{ name: string; tracks: ScrapedSpotifyTrack[] } | null> {
+  try {
+    const url = `https://open.spotify.com/embed/playlist/${playlistId}`;
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      }
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const nextDataMatch = html.match(/<script.*?id="__NEXT_DATA__".*?>(.*?)<\/script>/s);
+    if (!nextDataMatch) return null;
+    
+    const parsed = JSON.parse(nextDataMatch[1]);
+    const entity = parsed?.props?.pageProps?.state?.data?.entity;
+    if (!entity) return null;
+    
+    const name = entity.name || "Imported Spotify Playlist";
+    const trackList = entity.trackList || [];
+    
+    const tracks = trackList.map((item: any) => ({
+      trackName: item.title || "Unknown Track",
+      artistName: item.subtitle || "Unknown Artist",
+    }));
+    
+    return { name, tracks };
+  } catch (err) {
+    console.error("Spotify Embed Scrape failed:", err);
+    return null;
+  }
+}
+
 // Resolves a Spotify track by name + artist to a playable YouTube video details object
 async function resolveSpotifyTrackToYouTube(
   trackName: string,
@@ -412,25 +449,52 @@ playlistsRoute.post("/import", async (c) => {
 
       if (!playlistId) return c.json({ error: "Could not parse Spotify playlist ID from URL" }, 400);
 
+      let playlistName = "Imported Spotify Playlist";
+      let tracksToResolve: ScrapedSpotifyTrack[] = [];
+      let fetchedSuccessfully = false;
+
       const clientId = process.env.SPOTIFY_CLIENT_ID;
       const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
 
-      if (!clientId || !clientSecret) {
-        return c.json({ error: "Spotify credentials are not configured on the server." }, 500);
+      if (clientId && clientSecret) {
+        try {
+          const accessToken = await getSpotifyAccessToken(clientId, clientSecret);
+          if (accessToken) {
+            // Fetch playlist details
+            const spotifyRes = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}`, {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            });
+            if (spotifyRes.ok) {
+              const playlistData = await spotifyRes.json();
+              playlistName = playlistData.name || "Imported Spotify Playlist";
+              const spotifyItems = playlistData.tracks?.items || [];
+              tracksToResolve = spotifyItems.map((item: any) => ({
+                trackName: item?.track?.name || "Unknown Track",
+                artistName: item?.track?.artists?.map((a: any) => a.name).join(", ") || "Unknown Artist",
+              }));
+              fetchedSuccessfully = true;
+            } else {
+              console.warn("Spotify API fetch failed with status:", spotifyRes.status);
+            }
+          }
+        } catch (err) {
+          console.error("Spotify API process failed, falling back:", err);
+        }
       }
 
-      const accessToken = await getSpotifyAccessToken(clientId, clientSecret);
-      if (!accessToken) return c.json({ error: "Spotify authentication failed" }, 401);
+      if (!fetchedSuccessfully) {
+        console.log("Using public Spotify Embed scraper fallback for playlist:", playlistId);
+        const scraped = await getSpotifyPlaylistTracksViaEmbed(playlistId);
+        if (scraped) {
+          playlistName = scraped.name;
+          tracksToResolve = scraped.tracks;
+          fetchedSuccessfully = true;
+        }
+      }
 
-      // Fetch playlist details
-      const spotifyRes = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!spotifyRes.ok) return c.json({ error: "Failed to fetch playlist from Spotify. Ensure it is public." }, 404);
-      
-      const playlistData = await spotifyRes.json();
-      const playlistName = playlistData.name || "Imported Spotify Playlist";
-      const spotifyItems = playlistData.tracks?.items || [];
+      if (!fetchedSuccessfully) {
+        return c.json({ error: "Failed to fetch Spotify playlist. Ensure the playlist is public." }, 404);
+      }
 
       const [newPlaylist] = await db
         .insert(playlists)
@@ -444,15 +508,14 @@ playlistsRoute.post("/import", async (c) => {
       const tracksToInsert: any[] = [];
 
       // Concurrently resolve tracks in chunks of 5
-      const chunks = chunkArray(spotifyItems, 5);
+      const chunks = chunkArray(tracksToResolve, 5);
       let positionCounter = 0;
 
       for (const chunk of chunks) {
         const resolvedList = await Promise.all(
-          chunk.map(async (item: any) => {
-            if (!item?.track) return null;
-            const trackName = item.track.name;
-            const artistName = item.track.artists?.map((a: any) => a.name).join(", ") || "Unknown Artist";
+          chunk.map(async (item: ScrapedSpotifyTrack) => {
+            const trackName = item.trackName;
+            const artistName = item.artistName;
 
             const resolved = await resolveSpotifyTrackToYouTube(trackName, artistName, ytmusic);
             if (resolved.videoId) {

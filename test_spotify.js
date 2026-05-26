@@ -28,24 +28,19 @@ async function testSpotify() {
       return;
     }
 
-    // Fetch public playlist ITEMS (Focus Flow)
+    // Try fetching /tracks
     const playlistId = "37i9dQZF1DWZmwe0RTeFj4";
-    const itemsUrl = `https://api.spotify.com/v1/playlists/${playlistId}/items`;
-    console.log(`Fetching items from ${itemsUrl}...`);
+    const tracksUrl = `https://api.spotify.com/v1/playlists/${playlistId}/tracks`;
+    console.log(`Fetching from ${tracksUrl}...`);
     
-    const res = await fetch(itemsUrl, {
+    const res = await fetch(tracksUrl, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
-    console.log("Items response status:", res.status);
-    const data = await res.json();
-    if (res.ok) {
-      console.log("Success! Items count:", data.items?.length);
-      console.log("First track:", data.items?.[0]?.track?.name);
-      console.log("First artist:", data.items?.[0]?.track?.artists?.[0]?.name);
-    } else {
-      console.log("Error details:", data);
-    }
+    console.log("Response status:", res.status);
+    const text = await res.text();
+    console.log("Raw Response Text:", text);
+
   } catch (err) {
     console.error("Test failed:", err);
   }

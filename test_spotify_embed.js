@@ -1,5 +1,5 @@
 async function testEmbed() {
-  const playlistId = "37i9dQZF1DWZmwe0RTeFj4";
+  const playlistId = "37i9dQZF1DX0XUsuxWHRQd";
   const url = `https://open.spotify.com/embed/playlist/${playlistId}`;
   console.log("FETCHING SPOTIFY EMBED PAGE:", url);
   try {
