@@ -118,13 +118,16 @@ async function getSpotifyPlaylistTracksViaEmbed(playlistId: string): Promise<{ n
   }
 }
 
-// Resolves a Spotify track by name + artist to a playable YouTube video details object
-async function resolveSpotifyTrackToYouTube(
+// Resolves a track details by name + artist to a playable YouTube video details object (official YTMusic preferred, YouTube fallback)
+async function resolveTrackToOfficialYouTube(
   trackName: string,
   artistName: string,
+  fallbackVideoId: string,
+  fallbackImage: string,
+  fallbackDurationMs: number,
   ytmusic: YTMusic
 ): Promise<{ videoId: string; image: string; durationMs: number }> {
-  const query = `${trackName} ${artistName}`;
+  const query = `${trackName} ${artistName !== "Unknown Artist" ? artistName : ""}`.trim();
   const apiKey = process.env.YOUTUBE_API_KEY;
 
   // 1. Prioritize ytmusic-api to get high quality square track/album art
@@ -132,23 +135,58 @@ async function resolveSpotifyTrackToYouTube(
     const results = await ytmusic.searchSongs(query);
     const song = results[0];
     if (song && song.videoId) {
-      const thumbs = song.thumbnails ?? [];
-      const rawThumb = thumbs[thumbs.length - 1]?.url ?? "";
-      const image = rawThumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj");
-      return {
-        videoId: song.videoId,
-        image,
-        durationMs: (song.duration ?? 0) * 1000 || 180000,
-      };
+      // Loose validation check to prevent matching a wrong/unrelated song if missing in YTMusic
+      const cleanStr = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
+      const cleanExpectedTitle = cleanStr(trackName);
+      const cleanActualTitle = cleanStr(song.name);
+      const cleanExpectedArtist = cleanStr(artistName);
+      const cleanActualArtist = cleanStr(song.artist?.name || "");
+
+      // Match if the actual title contains the expected title, or vice-versa
+      const titleMatches = cleanActualTitle.includes(cleanExpectedTitle) || cleanExpectedTitle.includes(cleanActualTitle);
+      
+      // Alternatively, match if the first two words of expected title match
+      const expectedWords = cleanExpectedTitle.split(" ");
+      const firstTwoWords = expectedWords.slice(0, 2).join(" ");
+      const partialTitleMatches = firstTwoWords.length > 2 && cleanActualTitle.includes(firstTwoWords);
+
+      // Check artist matching if an artist is expected (not unknown)
+      const hasArtist = cleanExpectedArtist && cleanExpectedArtist !== "unknown artist";
+      const artistMatches = !hasArtist || 
+                            cleanActualArtist.includes(cleanExpectedArtist) || 
+                            cleanExpectedArtist.includes(cleanActualArtist) ||
+                            cleanExpectedArtist.split(" ").some(word => word.length > 2 && cleanActualArtist.includes(word));
+
+      if ((titleMatches || partialTitleMatches) && artistMatches) {
+        const thumbs = song.thumbnails ?? [];
+        const rawThumb = thumbs[thumbs.length - 1]?.url ?? "";
+        // Premium square album artwork resolution from YouTube Music
+        const image = rawThumb ? rawThumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj") : "";
+        return {
+          videoId: song.videoId,
+          image: image || fallbackImage,
+          durationMs: (song.duration ?? 0) * 1000 || fallbackDurationMs || 180000,
+        };
+      } else {
+        console.warn(`[YTMusic Check Failed] "${trackName}" by "${artistName}" returned mismatched song: "${song.name}" by "${song.artist?.name}". Falling back to YouTube.`);
+      }
     }
   } catch (err) {
     console.error("ytmusic-api search failed, trying YouTube API:", err);
   }
 
-  // 2. Fallback to regular YouTube Search API if ytmusic fails or has no tracks
+  // 2. If no official track exists, but we have a fallback video/image, use that!
+  if (fallbackVideoId) {
+    return {
+      videoId: fallbackVideoId,
+      image: fallbackImage,
+      durationMs: fallbackDurationMs,
+    };
+  }
+
+  // 3. Fallback to regular YouTube Search API if ytmusic fails and no fallback is provided
   if (apiKey) {
     try {
-      // Search YouTube v3 API
       const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&key=${apiKey}&maxResults=1`;
       const searchRes = await fetch(searchUrl);
       const searchData = await searchRes.json();
@@ -158,13 +196,12 @@ async function resolveSpotifyTrackToYouTube(
         const videoId = videoItem.id.videoId;
         const image = videoItem.snippet.thumbnails?.high?.url || videoItem.snippet.thumbnails?.default?.url || "";
 
-        // Fetch duration details
         const detailsUrl = `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoId}&key=${apiKey}`;
         const detailsRes = await fetch(detailsUrl);
         const detailsData = await detailsRes.json();
         const durationStr = detailsData.items?.[0]?.contentDetails?.duration;
 
-        let durationMs = 180000; // default 3 min fallback
+        let durationMs = 180000;
         if (durationStr) {
           durationMs = parseISO8601Duration(durationStr);
         }
@@ -206,7 +243,25 @@ playlistsRoute.get("/", async (c) => {
       userPlaylists = [likedPlaylist, ...userPlaylists];
     }
 
-    return c.json({ playlists: userPlaylists });
+    // Enrich each playlist with coverImage (first track image) and trackCount
+    const enriched = await Promise.all(
+      userPlaylists.map(async (pl) => {
+        const tracks = await db
+          .select({ image: playlistTracks.image })
+          .from(playlistTracks)
+          .where(eq(playlistTracks.playlistId, pl.id))
+          .orderBy(asc(playlistTracks.position));
+
+        const coverImage = tracks.find((t) => t.image)?.image || "";
+        return {
+          ...pl,
+          coverImage,
+          trackCount: tracks.length,
+        };
+      })
+    );
+
+    return c.json({ playlists: enriched });
   } catch (err) {
     console.error("Failed to fetch playlists:", err);
     return c.json({ error: "Failed to fetch playlists" }, 500);
@@ -422,23 +477,54 @@ playlistsRoute.post("/import", async (c) => {
         .returning();
 
       if (rawVideos.length > 0) {
-        const tracksToInsert = rawVideos.map((video, idx) => {
-          const thumbs = video.thumbnails ?? [];
-          const rawThumb = thumbs[thumbs.length - 1]?.url ?? "";
-          const image = rawThumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj");
+        const chunks = chunkArray(rawVideos, 5);
+        let positionCounter = 0;
+        const tracksToInsert: any[] = [];
 
-          return {
-            playlistId: newPlaylist.id,
-            videoId: video.videoId,
-            trackName: video.name,
-            artistName: video.artist?.name || "Unknown Artist",
-            image,
-            durationMs: (video.duration ?? 0) * 1000 || 180000,
-            position: idx,
-          };
-        });
+        for (const chunk of chunks) {
+          const resolvedList = await Promise.all(
+            chunk.map(async (video) => {
+              const thumbs = video.thumbnails ?? [];
+              const rawThumb = thumbs[thumbs.length - 1]?.url ?? "";
+              const fallbackImage = rawThumb ? rawThumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj") : "";
+              const fallbackVideoId = video.videoId;
+              const fallbackDurationMs = (video.duration ?? 0) * 1000 || 180000;
+              const artistName = video.artist?.name || "Unknown Artist";
 
-        await db.insert(playlistTracks).values(tracksToInsert);
+              // Resolve to see if a cool official YouTube Music track exists!
+              const resolved = await resolveTrackToOfficialYouTube(
+                video.name,
+                artistName,
+                fallbackVideoId,
+                fallbackImage,
+                fallbackDurationMs,
+                ytmusic
+              );
+
+              return {
+                playlistId: newPlaylist.id,
+                videoId: resolved.videoId,
+                trackName: video.name,
+                artistName,
+                image: resolved.image,
+                durationMs: resolved.durationMs,
+              };
+            })
+          );
+
+          for (const item of resolvedList) {
+            if (item) {
+              tracksToInsert.push({
+                ...item,
+                position: positionCounter++,
+              });
+            }
+          }
+        }
+
+        if (tracksToInsert.length > 0) {
+          await db.insert(playlistTracks).values(tracksToInsert);
+        }
       }
 
       return c.json({ playlist: newPlaylist, trackCount: rawVideos.length });
@@ -518,7 +604,7 @@ playlistsRoute.post("/import", async (c) => {
             const trackName = item.trackName;
             const artistName = item.artistName;
 
-            const resolved = await resolveSpotifyTrackToYouTube(trackName, artistName, ytmusic);
+            const resolved = await resolveTrackToOfficialYouTube(trackName, artistName, "", "", 0, ytmusic);
             if (resolved.videoId) {
               return {
                 playlistId: newPlaylist.id,
