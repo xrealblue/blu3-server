@@ -5,16 +5,12 @@ async function testSpotify() {
   const clientId = process.env.SPOTIFY_CLIENT_ID;
   const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
 
-  console.log("CLIENT ID:", clientId);
-  console.log("CLIENT SECRET:", clientSecret);
-
   if (!clientId || !clientSecret) {
     console.log("Missing Spotify credentials!");
     return;
   }
 
   try {
-    // 1. Get access token
     console.log("Exchanging token...");
     const tokenRes = await fetch("https://accounts.spotify.com/api/token", {
       method: "POST",
@@ -26,27 +22,27 @@ async function testSpotify() {
     });
 
     const tokenData = await tokenRes.json();
-    console.log("Token response:", tokenData);
-
     const accessToken = tokenData.access_token;
     if (!accessToken) {
       console.log("Failed to get access token!");
       return;
     }
 
-    // 2. Fetch public playlist (e.g. Spotify's Today's Top Hits)
-    const playlistId = "37i9dQZF1DXcBWIGsyNaS1";
-    console.log(`Fetching playlist ${playlistId}...`);
-    const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}`, {
+    // Fetch public playlist ITEMS (Focus Flow)
+    const playlistId = "37i9dQZF1DWZmwe0RTeFj4";
+    const itemsUrl = `https://api.spotify.com/v1/playlists/${playlistId}/items`;
+    console.log(`Fetching items from ${itemsUrl}...`);
+    
+    const res = await fetch(itemsUrl, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
-    console.log("Playlist status:", res.status);
+    console.log("Items response status:", res.status);
     const data = await res.json();
     if (res.ok) {
-      console.log("Playlist Name:", data.name);
-      console.log("Track Count:", data.tracks?.items?.length);
-      console.log("First track:", data.tracks?.items?.[0]?.track?.name);
+      console.log("Success! Items count:", data.items?.length);
+      console.log("First track:", data.items?.[0]?.track?.name);
+      console.log("First artist:", data.items?.[0]?.track?.artists?.[0]?.name);
     } else {
       console.log("Error details:", data);
     }
