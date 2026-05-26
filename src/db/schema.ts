@@ -86,3 +86,37 @@ export type User = typeof users.$inferSelect;
 export type Room = typeof rooms.$inferSelect;
 export type RoomMember = typeof roomMembers.$inferSelect;
 export type RoomQueue = typeof roomQueue.$inferSelect;
+
+export const playlists = pgTable("playlists", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  isLiked: boolean("is_liked").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const playlistTracks = pgTable(
+  "playlist_tracks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    playlistId: uuid("playlist_id")
+      .notNull()
+      .references(() => playlists.id, { onDelete: "cascade" }),
+    videoId: text("video_id").notNull(),
+    trackName: text("track_name").notNull(),
+    artistName: text("artist_name").notNull(),
+    image: text("image").notNull().default(""),
+    durationMs: integer("duration_ms").notNull().default(0),
+    position: integer("position").notNull().default(0),
+    addedAt: timestamp("added_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("pt_playlist_idx").on(t.playlistId),
+    index("pt_position_idx").on(t.position),
+  ],
+);
+
+export type Playlist = typeof playlists.$inferSelect;
+export type PlaylistTrack = typeof playlistTracks.$inferSelect;
