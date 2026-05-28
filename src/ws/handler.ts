@@ -117,6 +117,24 @@ async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
   }
 }
 
+const syncDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function scheduleQueueSync(roomId: string, roomCode: string, immediate = false) {
+  const existing = syncDebounceTimers.get(roomId);
+  if (existing) clearTimeout(existing);
+
+  if (immediate) {
+    syncDebounceTimers.delete(roomId);
+    syncQueueToDb(roomId, getQueue(roomCode)).catch(console.error);
+    return;
+  }
+
+  syncDebounceTimers.set(roomId, setTimeout(() => {
+    syncDebounceTimers.delete(roomId);
+    syncQueueToDb(roomId, getQueue(roomCode)).catch(console.error);
+  }, 10_000));
+}
+
 export async function handleWS(ws: any, url: URL) {
   const token = url.searchParams.get("token");
   const roomCode = url.searchParams.get("room")?.toUpperCase();
@@ -325,7 +343,7 @@ export async function handleWS(ws: any, url: URL) {
             insertQueueTop(roomCode, queueTrack);
           }
 
-          await syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
+          scheduleQueueSync(dbRoom.id, roomCode, true);
 
           broadcast(roomCode, {
             type: "room:queue_update",
@@ -457,7 +475,7 @@ export async function handleWS(ws: any, url: URL) {
             type: "room:queue_update",
             queue: getQueue(roomCode),
           });
-          await syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
+          scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
         case "queue:remove": {
@@ -466,7 +484,7 @@ export async function handleWS(ws: any, url: URL) {
             type: "room:queue_update",
             queue: getQueue(roomCode),
           });
-          await syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
+          scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
         case "queue:cycle_current": {
@@ -476,7 +494,7 @@ export async function handleWS(ws: any, url: URL) {
             type: "room:queue_update",
             queue: getQueue(roomCode),
           });
-          await syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
+          scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
         case "queue:clear": {
@@ -485,7 +503,7 @@ export async function handleWS(ws: any, url: URL) {
             type: "room:queue_update",
             queue: getQueue(roomCode),
           });
-          await syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
+          scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
       }
@@ -493,12 +511,17 @@ export async function handleWS(ws: any, url: URL) {
 
     onClose() {
       removeClient(socketId, roomCode);
+      const timer = syncDebounceTimers.get(dbRoom.id);
+      if (timer) {
+        clearTimeout(timer);
+        syncDebounceTimers.delete(dbRoom.id);
+        syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
+      }
       broadcast(roomCode, {
         type: "room:member_left",
         members: getRoomMembers(roomCode),
         userId: payload.sub,
       });
-      console.log(`WS closed: ${payload.name} left ${roomCode}`);
     },
   };
 }
