@@ -1,8 +1,6 @@
-// db/trackHistory.ts  (new file)
-
 import { db } from "./index.js";
 import { roomTrackHistory } from "./schema.js";
-import { eq, asc, lt } from "drizzle-orm";
+import { eq, asc, sql } from "drizzle-orm";
 
 export async function pushTrackHistory(
   roomId: string,
@@ -13,7 +11,6 @@ export async function pushTrackHistory(
     image: string;
   },
 ) {
-  // 1. Insert the new track
   await db.insert(roomTrackHistory).values({
     roomId,
     videoId: track.videoId,
@@ -22,22 +19,16 @@ export async function pushTrackHistory(
     image: track.image,
   });
 
-  // 2. Count total rows for this room
-  const all = await db
-    .select({ id: roomTrackHistory.id, playedAt: roomTrackHistory.playedAt })
-    .from(roomTrackHistory)
-    .where(eq(roomTrackHistory.roomId, roomId))
-    .orderBy(asc(roomTrackHistory.playedAt)); // oldest → newest
-
-  // 3. If more than 10, delete the oldest (first in the sorted list)
-  if (all.length > 10) {
-    const toDelete = all.slice(0, all.length - 10); // everything before the 10 newest
-    for (const row of toDelete) {
-      await db
-        .delete(roomTrackHistory)
-        .where(eq(roomTrackHistory.id, row.id));
-    }
-  }
+  await db.execute(sql`
+    DELETE FROM room_track_history
+    WHERE room_id = ${roomId}
+      AND id NOT IN (
+        SELECT id FROM room_track_history
+        WHERE room_id = ${roomId}
+        ORDER BY played_at DESC
+        LIMIT 10
+      )
+  `);
 }
 
 export async function getTrackHistory(roomId: string) {
@@ -45,5 +36,5 @@ export async function getTrackHistory(roomId: string) {
     .select()
     .from(roomTrackHistory)
     .where(eq(roomTrackHistory.roomId, roomId))
-    .orderBy(asc(roomTrackHistory.playedAt)); // oldest → newest, so UI can reverse
+    .orderBy(asc(roomTrackHistory.playedAt));
 }
