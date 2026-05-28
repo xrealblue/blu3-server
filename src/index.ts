@@ -1,4 +1,4 @@
-import { serve, upgradeWebSocket } from "@hono/node-server"; // ← from node-server, not node-ws
+import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
@@ -6,6 +6,7 @@ import * as dotenv from "dotenv";
 dotenv.config();
 import { WebSocketServer } from "ws";
 import YTMusic from "ytmusic-api";
+import play_dl from "play-dl";
 import authRoute from "./routes/auth.js";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
@@ -121,6 +122,35 @@ app.get("/api/suggest", async (c) => {
     return c.json({ suggestions: suggestions.slice(0, 8) });
   } catch {
     return c.json({ suggestions: [] });
+  }
+});
+
+/* ─── Stream URL extraction ────────────────────────── */
+const streamUrlCache = new Map<string, { url: string; expiresAt: number }>();
+const STREAM_CACHE_TTL = 30 * 60 * 1000; // 30 min
+
+app.get("/api/stream", async (c) => {
+  const videoId = c.req.query("videoId");
+  if (!videoId) return c.json({ error: "Missing videoId" }, 400);
+
+  const cached = streamUrlCache.get(videoId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return c.json({ url: cached.url });
+  }
+
+  try {
+    const stream = await play_dl.stream(
+      `https://youtube.com/watch?v=${videoId}`,
+      { quality: 0 },
+    );
+    streamUrlCache.set(videoId, {
+      url: stream.url,
+      expiresAt: Date.now() + STREAM_CACHE_TTL,
+    });
+    return c.json({ url: stream.url });
+  } catch (err) {
+    console.error("Stream extraction error:", err);
+    return c.json({ error: "Failed to get stream" }, 500);
   }
 });
 
