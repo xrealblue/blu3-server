@@ -3,7 +3,8 @@ import { db } from "../db/index.js";
 import { playlists, playlistTracks, users } from "../db/schema.js";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { verify } from "hono/jwt";
-import YTMusic from "ytmusic-api";
+import type YTMusic from "ytmusic-api";
+import { getYTMusic } from "../lib/ytmusic.js";
 
 type PlaylistsEnv = {
   Variables: {
@@ -13,7 +14,6 @@ type PlaylistsEnv = {
 
 const playlistsRoute = new Hono<PlaylistsEnv>();
 
-// JWT authentication middleware
 const requireAuth: MiddlewareHandler<PlaylistsEnv> = async (c, next) => {
   const header = c.req.header("Authorization");
   if (!header?.startsWith("Bearer "))
@@ -33,15 +33,6 @@ const requireAuth: MiddlewareHandler<PlaylistsEnv> = async (c, next) => {
 };
 
 playlistsRoute.use("*", requireAuth);
-
-// YTMusic lazy loader helper
-let ytmusicInstance: YTMusic | null = null;
-async function getYTMusic(): Promise<YTMusic> {
-  if (ytmusicInstance) return ytmusicInstance;
-  ytmusicInstance = new YTMusic();
-  await ytmusicInstance.initialize();
-  return ytmusicInstance;
-}
 
 // ISO 8601 duration parser (PT3M45S -> milliseconds)
 function parseISO8601Duration(duration: string): number {

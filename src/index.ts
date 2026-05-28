@@ -5,20 +5,11 @@ import { logger } from "hono/logger";
 import * as dotenv from "dotenv";
 dotenv.config();
 import { WebSocketServer } from "ws";
-import YTMusic from "ytmusic-api";
 import authRoute from "./routes/auth.js";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
-
-let ytmusic: YTMusic | null = null;
-async function getYTMusic(): Promise<YTMusic> {
-  if (ytmusic) return ytmusic;
-  ytmusic = new YTMusic();
-  await ytmusic.initialize();
-  return ytmusic;
-}
-getYTMusic().catch(console.error);
+import { getYTMusic, resetYTMusic } from "./lib/ytmusic.js";
 
 const getCorsOrigins = (): string[] => {
   const originsEnv = process.env.CORS_ORIGINS;
@@ -99,7 +90,7 @@ app.get("/api/search", async (c) => {
     return c.json({ tracks });
   } catch (err) {
     console.error("Search error:", err);
-    ytmusic = null;
+    resetYTMusic();
     return c.json({ error: "Search failed" }, 500);
   }
 });
