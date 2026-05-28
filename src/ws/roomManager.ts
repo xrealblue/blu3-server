@@ -54,6 +54,7 @@ interface Room {
   code: string;
   hostId: string;
   clients: Map<string, WSClient>;
+  hostConnected: boolean;
   playback: PlaybackState;
   playbackMode: PlaybackMode;
   recentTracks: RecentTrack[];
@@ -71,6 +72,7 @@ export function getOrCreateRoom(code: string, hostId: string): Room {
       code,
       hostId,
       clients: new Map(),
+      hostConnected: false,
       playback: {
         videoId: null,
         trackName: "",
@@ -113,6 +115,9 @@ export function addClient(client: WSClient) {
   const room = rooms.get(client.roomCode);
   if (room) {
     room.clients.set(client.id, client);
+    if (client.userId === room.hostId) {
+      room.hostConnected = true;
+    }
     const timer = roomCleanupTimers.get(client.roomCode);
     if (timer) {
       clearTimeout(timer);
@@ -124,6 +129,10 @@ export function addClient(client: WSClient) {
 export function removeClient(socketId: string, roomCode: string) {
   const room = rooms.get(roomCode);
   if (!room) return;
+  const client = room.clients.get(socketId);
+  if (client?.userId === room.hostId) {
+    room.hostConnected = false;
+  }
   room.clients.delete(socketId);
 
   if (room.clients.size === 0) {
@@ -147,12 +156,7 @@ export function getRoomMembers(code: string) {
 }
 
 export function isHostInRoom(code: string): boolean {
-  const room = rooms.get(code);
-  if (!room) return false;
-  for (const client of room.clients.values()) {
-    if (client.userId === room.hostId) return true;
-  }
-  return false;
+  return rooms.get(code)?.hostConnected ?? false;
 }
 
 export function setPlayback(
