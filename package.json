@@ -24,9 +24,10 @@
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.21",
     "nanoid": "^5.1.11",
-    "play-dl": "^1.9.7",
+
     "postgres": "^3.4.9",
     "ws": "^8.21.0",
+    "youtubei.js": "^13.3.0",
     "ytmusic-api": "^5.3.1"
   },
   "devDependencies": {
