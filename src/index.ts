@@ -143,11 +143,14 @@ app.get("/api/stream", async (c) => {
       `https://youtube.com/watch?v=${videoId}`,
       { quality: 0 },
     );
+    // stream is YouTubeStream; extract the direct audio URL
+    const streamUrl = (stream as any).url;
+    if (!streamUrl) throw new Error("No stream URL returned");
     streamUrlCache.set(videoId, {
-      url: stream.url,
+      url: streamUrl,
       expiresAt: Date.now() + STREAM_CACHE_TTL,
     });
-    return c.json({ url: stream.url });
+    return c.json({ url: streamUrl });
   } catch (err) {
     console.error("Stream extraction error:", err);
     return c.json({ error: "Failed to get stream" }, 500);
