@@ -6,7 +6,6 @@ import * as dotenv from "dotenv";
 dotenv.config();
 import { WebSocketServer } from "ws";
 import YTMusic from "ytmusic-api";
-import { Innertube } from "youtubei.js";
 import authRoute from "./routes/auth.js";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
@@ -20,16 +19,6 @@ async function getYTMusic(): Promise<YTMusic> {
   return ytmusic;
 }
 getYTMusic().catch(console.error);
-
-let innertube: Innertube | null = null;
-async function getInnertube(): Promise<Innertube> {
-  if (innertube) return innertube;
-  const cookie = process.env.YOUTUBE_COOKIES;
-  innertube = await Innertube.create({
-    cookie: cookie?.trim() ? cookie : undefined,
-  });
-  return innertube;
-}
 
 const getCorsOrigins = (): string[] => {
   const originsEnv = process.env.CORS_ORIGINS;
@@ -132,35 +121,6 @@ app.get("/api/suggest", async (c) => {
     return c.json({ suggestions: suggestions.slice(0, 8) });
   } catch {
     return c.json({ suggestions: [] });
-  }
-});
-
-/* ─── Stream URL extraction ────────────────────────── */
-const streamUrlCache = new Map<string, { url: string; expiresAt: number }>();
-const STREAM_CACHE_TTL = 30 * 60 * 1000; // 30 min
-
-app.get("/api/stream", async (c) => {
-  const videoId = c.req.query("videoId");
-  if (!videoId) return c.json({ error: "Missing videoId" }, 400);
-
-  const cached = streamUrlCache.get(videoId);
-  if (cached && cached.expiresAt > Date.now()) {
-    return c.json({ url: cached.url });
-  }
-
-  try {
-    const yt = await getInnertube();
-    const info = await yt.getInfo(videoId);
-    const format = info.chooseFormat({ type: "audio", quality: "best" });
-    if (!format?.url) throw new Error("No audio format found");
-    streamUrlCache.set(videoId, {
-      url: format.url,
-      expiresAt: Date.now() + STREAM_CACHE_TTL,
-    });
-    return c.json({ url: format.url });
-  } catch (err) {
-    console.error("Stream extraction error:", err);
-    return c.json({ error: "Failed to get stream" }, 500);
   }
 });
 

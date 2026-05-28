@@ -27,7 +27,6 @@
 
     "postgres": "^3.4.9",
     "ws": "^8.21.0",
-    "youtubei.js": "^13.3.0",
     "ytmusic-api": "^5.3.1"
   },
   "devDependencies": {
