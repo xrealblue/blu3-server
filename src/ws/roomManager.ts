@@ -1,5 +1,5 @@
 export interface WSClient {
-  id: string; // socket id
+  id: string;
   userId: string;
   name: string;
   avatar?: string;
@@ -62,6 +62,8 @@ interface Room {
 }
 
 const rooms = new Map<string, Room>();
+const roomCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const ROOM_CLEANUP_TTL_MS = 5 * 60 * 1000;
 
 export function getOrCreateRoom(code: string, hostId: string): Room {
   if (!rooms.has(code)) {
@@ -109,13 +111,29 @@ export function getRoom(code: string) {
 
 export function addClient(client: WSClient) {
   const room = rooms.get(client.roomCode);
-  if (room) room.clients.set(client.id, client);
+  if (room) {
+    room.clients.set(client.id, client);
+    const timer = roomCleanupTimers.get(client.roomCode);
+    if (timer) {
+      clearTimeout(timer);
+      roomCleanupTimers.delete(client.roomCode);
+    }
+  }
 }
 
 export function removeClient(socketId: string, roomCode: string) {
   const room = rooms.get(roomCode);
   if (!room) return;
   room.clients.delete(socketId);
+
+  if (room.clients.size === 0) {
+    const existing = roomCleanupTimers.get(roomCode);
+    if (existing) clearTimeout(existing);
+    roomCleanupTimers.set(roomCode, setTimeout(() => {
+      rooms.delete(roomCode);
+      roomCleanupTimers.delete(roomCode);
+    }, ROOM_CLEANUP_TTL_MS));
+  }
 }
 
 export function getRoomMembers(code: string) {
@@ -179,7 +197,7 @@ export function broadcast(code: string, msg: object, excludeId?: string) {
   room.clients.forEach((client) => {
     if (client.id === excludeId) return;
     try {
-      client.ws.send(data); // Hono WSContext.send() takes string directly
+      client.ws.send(data);
     } catch (err) {
       console.error("Broadcast error:", err);
     }
@@ -217,11 +235,9 @@ export function removeFromQueue(code: string, trackId: string) {
 export function insertQueueTop(code: string, track: QueueTrack) {
   const room = rooms.get(code);
   if (!room) return;
-  // Deduplicate: remove any other instance of this track
   room.queue = room.queue.filter(
     (t) => t.id !== track.id && t.videoId !== track.videoId,
   );
-  // Add to index 0
   room.queue.unshift(track);
 }
 
