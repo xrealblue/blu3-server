@@ -3,6 +3,7 @@ import { db } from "../db/index.js";
 import { rooms, roomMembers, users, roomTrackHistory } from "../db/schema.js";
 import { eq, and, desc } from "drizzle-orm";
 import { verify } from "hono/jwt";
+import { customAlphabet } from "nanoid";
 
 type RoomsEnv = {
   Variables: {
@@ -21,7 +22,7 @@ const requireAuth: MiddlewareHandler<RoomsEnv> = async (c, next) => {
       header.slice(7),
       process.env.JWT_SECRET!,
       "HS256",
-    ); // ← "HS256"
+    );
     c.set("userId", payload.sub as string);
     await next();
   } catch (err) {
@@ -30,13 +31,7 @@ const requireAuth: MiddlewareHandler<RoomsEnv> = async (c, next) => {
   }
 };
 
-// Generate random room code
-function genCode(len = 6) {
-  return Math.random()
-    .toString(36)
-    .substring(2, 2 + len)
-    .toUpperCase();
-}
+const genCode = customAlphabet("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 6);
 
 roomsRoute.post("/", requireAuth, async (c) => {
   const userId = c.get("userId");
