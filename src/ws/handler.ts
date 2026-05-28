@@ -91,25 +91,21 @@ function canControlPlayback(roomCode: string, hostId: string, userId: string) {
 
 async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
   try {
-    // 1. Delete all existing queue tracks for the room
     await db.delete(roomQueue).where(eq(roomQueue.roomId, roomId));
 
-    // 2. Insert all current tracks with their position indices
     if (queue.length > 0) {
+      const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
       await db.insert(roomQueue).values(
-        queue.map((track, index) => {
-          const isValidUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(track.id);
-          return {
-            id: isValidUuid ? track.id : undefined,
-            roomId,
-            videoId: track.videoId,
-            trackName: track.name,
-            artistName: track.artists?.[0]?.name ?? "Unknown",
-            image: track.image ?? "",
-            durationMs: track.duration_ms ?? 0,
-            position: index,
-          };
-        })
+        queue.map((track, index) => ({
+          id: isUuid(track.id) ? track.id : undefined,
+          roomId,
+          videoId: track.videoId,
+          trackName: track.name,
+          artistName: track.artists?.[0]?.name ?? "Unknown",
+          image: track.image ?? "",
+          durationMs: track.duration_ms ?? 0,
+          position: index,
+        }))
       );
     }
   } catch (err) {
@@ -331,7 +327,6 @@ export async function handleWS(ws: any, url: URL) {
           });
 
           if (msg.videoId) {
-            // Insert played track at the top of the queue
             const queueTrack = {
               id: msg.id || `room-${msg.videoId}`,
               videoId: msg.videoId,
@@ -361,7 +356,6 @@ export async function handleWS(ws: any, url: URL) {
             image: msg.image ?? "",
             duration_ms: msg.duration_ms ?? 0,
             recentTracks: getRecentTracks(roomCode),
-            queue: getQueue(roomCode),
           });
           break;
         }
