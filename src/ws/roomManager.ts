@@ -190,12 +190,15 @@ export function setPlaybackMode(code: string, mode: Partial<PlaybackMode>) {
   };
 }
 
+const WS_OPEN = 1;
+
 export function broadcast(code: string, msg: object, excludeId?: string) {
   const room = rooms.get(code);
   if (!room) return;
   const data = JSON.stringify(msg);
   room.clients.forEach((client) => {
     if (client.id === excludeId) return;
+    if (client.ws.readyState !== WS_OPEN) return;
     try {
       client.ws.send(data);
     } catch (err) {
@@ -207,7 +210,7 @@ export function broadcast(code: string, msg: object, excludeId?: string) {
 export function sendTo(socketId: string, roomCode: string, msg: object) {
   const room = rooms.get(roomCode);
   const client = room?.clients.get(socketId);
-  if (client) {
+  if (client && client.ws.readyState === WS_OPEN) {
     try {
       client.ws.send(JSON.stringify(msg));
     } catch (err) {
