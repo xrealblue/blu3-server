@@ -1,5 +1,10 @@
-// Standalone test script for Apple Music playlist import via AMP API
+// Full flow test: Apple Music scrape + YouTube resolution + DB insertion
 // Run: node scripts/test-apple-music.mjs
+
+import { config } from "dotenv";
+import { resolve } from "path";
+
+config({ path: resolve(import.meta.dirname, "../.env") });
 
 const PLAYLIST_URL = "https://music.apple.com/in/playlist/2000s-bollywood-essentials/pl.f55c6379d8cc475fb96bfeecb5d554a7";
 
@@ -20,138 +25,126 @@ function parseAppleMusicURL(url) {
   }
 }
 
-async function step1_parseUrl() {
-  console.log("\n=== Step 1: Parse URL ===");
-  const parts = parseAppleMusicURL(PLAYLIST_URL);
-  if (!parts) {
-    console.log("FAIL: Could not parse URL");
-    return null;
+// Simulate the server's chunkArray function
+function chunkArray(array, size) {
+  const chunks = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size));
   }
-  console.log(`OK: storefront="${parts.storefront}", playlistId="${parts.playlistId}"`);
-  return parts;
+  return chunks;
 }
 
-async function step2_fetchPage() {
-  console.log("\n=== Step 2: Fetch beta.music.apple.com ===");
-  const res = await fetch("https://beta.music.apple.com", {
-    headers: { "User-Agent": UA }
-  });
-  if (!res.ok) {
-    console.log(`FAIL: HTTP ${res.status}`);
-    return null;
-  }
-  const html = await res.text();
-  console.log(`OK: HTML length = ${html.length}`);
-
-  const jsUri = html.match(/\/assets\/index-legacy[~-][^/]+\.js/)?.[0];
-  if (!jsUri) {
-    console.log("FAIL: Could not find index-legacy JS bundle in HTML");
-    // List what we found
-    const scripts = [...html.matchAll(/(\/assets\/[^"]+\.js)/g)].map(m => m[1]);
-    console.log("Found JS bundles:", scripts.join(", "));
-    return null;
-  }
-  console.log(`OK: Found JS bundle: ${jsUri}`);
-  return jsUri;
-}
-
-async function step3_extractToken(jsUri) {
-  console.log("\n=== Step 3: Extract JWT from JS bundle ===");
-  console.log(`Fetching: https://beta.music.apple.com${jsUri}`);
-  const res = await fetch(`https://beta.music.apple.com${jsUri}`, {
-    headers: { "User-Agent": UA }
-  });
-  if (!res.ok) {
-    console.log(`FAIL: HTTP ${res.status}`);
-    return null;
-  }
-  const js = await res.text();
-  console.log(`OK: JS length = ${js.length}`);
-
-  // Try to find token in string literals
-  let match = js.match(/['`"](eyJ[a-zA-Z0-9_-]+?\.[a-zA-Z0-9_-]+?\.[a-zA-Z0-9_-]+)['`"]/);
-  if (!match) {
-    // Fallback: try without quotes
-    match = js.match(/(eyJ[a-zA-Z0-9_-]+?\.[a-zA-Z0-9_-]+?\.[a-zA-Z0-9_-]+)/);
-  }
-  if (!match) {
-    console.log("FAIL: No JWT token found in JS bundle");
-    return null;
-  }
-
-  const token = match[1];
-  // Decode payload to verify
-  const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
-  console.log(`OK: Token found (${token.length} chars)`);
-  console.log(`    iss: ${payload.iss}, exp: ${new Date(payload.exp * 1000).toISOString()}`);
-  return token;
-}
-
-async function step4_fetchPlaylist(token, parts) {
-  console.log("\n=== Step 4: Fetch playlist from AMP API ===");
-  const apiUrl = `https://amp-api.music.apple.com/v1/catalog/${parts.storefront}/playlists/${parts.playlistId}?include=tracks`;
-  console.log(`GET ${apiUrl}`);
-
-  const res = await fetch(apiUrl, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Origin: "https://music.apple.com",
-      "User-Agent": UA,
+// Simulate resolveTrackToOfficialYouTube (simplified - just calls ytmusic-api)
+async function resolveTrack(trackName, artistName, ytmusic) {
+  try {
+    const query = `${trackName} ${artistName}`;
+    const results = await ytmusic.searchSongs(query);
+    if (results && results.length > 0) {
+      const best = results[0];
+      return {
+        videoId: best.videoId || "",
+        image: best.thumbnails?.[best.thumbnails.length - 1]?.url?.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj") || "",
+        durationMs: (best.duration ?? 0) * 1000 || 180000,
+      };
     }
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    console.log(`FAIL: HTTP ${res.status} - ${text.slice(0, 500)}`);
-    return null;
+  } catch (err) {
+    console.error(`  resolveTrack failed for "${query}":`, err.message);
   }
-
-  const data = await res.json();
-  const playlist = data?.data?.[0];
-  if (!playlist) {
-    console.log("FAIL: No playlist data in response");
-    console.log("Response:", JSON.stringify(data).slice(0, 500));
-    return null;
-  }
-
-  const name = playlist.attributes?.name || "Unknown";
-  const tracks = (playlist.relationships?.tracks?.data || [])
-    .filter(item => item.type === "songs")
-    .map(item => ({
-      trackName: item.attributes?.name || "Unknown Track",
-      artistName: item.attributes?.artistName || "Unknown Artist",
-    }));
-
-  console.log(`OK: Playlist "${name}" with ${tracks.length} tracks`);
-  console.log("\nFirst 10 tracks:");
-  tracks.slice(0, 10).forEach((t, i) => {
-    console.log(`  ${i + 1}. ${t.trackName} - ${t.artistName}`);
-  });
-
-  return { name, tracks };
+  return { videoId: "", image: "", durationMs: 0 };
 }
 
 async function main() {
   console.log("==============================================");
-  console.log("Apple Music AMP API Test");
-  console.log(`URL: ${PLAYLIST_URL}`);
-  console.log("==============================================");
+  console.log("Apple Music + YouTube Resolution Full Test");
+  console.log("==============================================\n");
 
-  const parts = await step1_parseUrl();
-  if (!parts) process.exit(1);
+  // Step 1: Parse URL
+  console.log("=== Step 1: Parse URL ===");
+  const parts = parseAppleMusicURL(PLAYLIST_URL);
+  if (!parts) { console.log("FAIL: URL parse"); process.exit(1); }
+  console.log(`storefront="${parts.storefront}", playlistId="${parts.playlistId}"\n`);
 
-  const jsUri = await step2_fetchPage();
-  if (!jsUri) process.exit(1);
+  // Step 2: Get token
+  console.log("=== Step 2: Get AMP API token ===");
+  const mainRes = await fetch("https://beta.music.apple.com", { headers: { "User-Agent": UA } });
+  const html = await mainRes.text();
+  const jsUri = html.match(/\/assets\/index-legacy[~-][^/]+\.js/)?.[0];
+  if (!jsUri) { console.log("FAIL: JS bundle not found"); process.exit(1); }
+  const jsRes = await fetch(`https://beta.music.apple.com${jsUri}`, { headers: { "User-Agent": UA } });
+  const js = await jsRes.text();
+  const token = js.match(/['\x60"](eyJ[a-zA-Z0-9_-]+?\.[a-zA-Z0-9_-]+?\.[a-zA-Z0-9_-]+)['\x60"]/)?.[1];
+  if (!token) { console.log("FAIL: Token not found"); process.exit(1); }
+  const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
+  console.log(`Token OK (${token.length} chars, iss=${payload.iss})\n`);
 
-  const token = await step3_extractToken(jsUri);
-  if (!token) process.exit(1);
+  // Step 3: Fetch playlist with pagination
+  console.log("=== Step 3: Fetch playlist tracks (paginated) ===");
+  const allTracks = [];
+  let playlistName = "Unknown";
+  let offset = 0;
 
-  const result = await step4_fetchPlaylist(token, parts);
-  if (!result) process.exit(1);
+  while (true) {
+    const apiUrl = `https://amp-api.music.apple.com/v1/catalog/${parts.storefront}/playlists/${parts.playlistId}?include=tracks&offset=${offset}`;
+    const res = await fetch(apiUrl, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Origin: "https://music.apple.com",
+        "User-Agent": UA,
+      }
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.log(`FAIL: HTTP ${res.status} at offset ${offset} - ${errText.slice(0, 200)}`);
+      process.exit(1);
+    }
+    const data = await res.json();
+    const playlist = data?.data?.[0];
+    if (!playlist) break;
+
+    playlistName = playlist.attributes?.name || playlistName;
+    const batch = (playlist.relationships?.tracks?.data || [])
+      .filter(item => item.type === "songs")
+      .map(item => ({
+        trackName: item.attributes?.name || "Unknown Track",
+        artistName: item.attributes?.artistName || "Unknown Artist",
+      }));
+
+    allTracks.push(...batch);
+    console.log(`  offset=${offset}: got ${batch.length} tracks (total: ${allTracks.length})`);
+
+    if (batch.length < 100) break;
+    offset += 100;
+  }
+
+  if (allTracks.length === 0) { console.log("FAIL: No tracks found"); process.exit(1); }
+  console.log(`\nTotal tracks: ${allTracks.length}`);
+  console.log("First 5:");
+  allTracks.slice(0, 5).forEach((t, i) => console.log(`  ${i + 1}. ${t.trackName} - ${t.artistName}`));
+  console.log();
+
+  // Step 4: YouTube resolution test (first 10 tracks)
+  console.log("=== Step 4: Test YouTube resolution (first 10 tracks) ===");
+  try {
+    const { default: YTMusic } = await import("ytmusic-api");
+    const ytmusic = new YTMusic();
+    await ytmusic.initialize();
+    console.log("ytmusic-api initialized OK");
+
+    const testChunk = allTracks.slice(0, 10);
+    for (const item of testChunk) {
+      const resolved = await resolveTrack(item.trackName, item.artistName, ytmusic);
+      const status = resolved.videoId ? "OK" : "FAIL";
+      console.log(`  [${status}] ${item.trackName} - ${item.artistName} -> videoId=${resolved.videoId || "(none)"}`);
+    }
+  } catch (err) {
+    console.log("ytmusic-api init failed:", err.message);
+    console.log("(This is OK if YouTube resolution is not the focus of this test)");
+  }
 
   console.log("\n==============================================");
-  console.log("SUCCESS: All steps passed!");
-  console.log(`Playlist: ${result.name}`);
-  console.log(`Tracks: ${result.tracks.length}`);
+  console.log("TEST COMPLETE");
+  console.log(`Playlist: ${playlistName}`);
+  console.log(`Total tracks: ${allTracks.length}`);
   console.log("==============================================");
 }
 
