@@ -201,7 +201,7 @@ async function getAppleMusicPlaylistTracks(url: string): Promise<{ name: string;
 
       allTracks.push(...batch);
 
-      if (batch.length < 100) break;
+      if (batch.length < 100 || allTracks.length >= 200) break;
       offset += 100;
     }
 
