@@ -24,6 +24,7 @@ export const rooms = pgTable("rooms", {
   hostId: uuid("host_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
+  hostName: text("host_name").notNull(),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
