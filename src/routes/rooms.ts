@@ -38,6 +38,14 @@ roomsRoute.post("/", requireAuth, async (c) => {
   const { name } = await c.req.json();
   if (!name?.trim()) return c.json({ error: "Room name required" }, 400);
 
+  // Fetch the host's name to satisfy the NOT NULL hostName column
+  const [user] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  if (!user) return c.json({ error: "User not found" }, 404);
+
   let code = genCode();
   while (
     (await db.select().from(rooms).where(eq(rooms.code, code))).length > 0
@@ -47,7 +55,7 @@ roomsRoute.post("/", requireAuth, async (c) => {
 
   const [room] = await db
     .insert(rooms)
-    .values({ code, name: name.trim(), hostId: userId })
+    .values({ code, name: name.trim(), hostId: userId, hostName: user.name })
     .returning();
 
   await db.insert(roomMembers).values({ roomId: room.id, userId });
@@ -132,7 +140,9 @@ roomsRoute.post("/:code/leave", requireAuth, async (c) => {
 
   await db
     .delete(roomMembers)
-    .where(and(eq(roomMembers.roomId, room.id), eq(roomMembers.userId, userId)));
+    .where(
+      and(eq(roomMembers.roomId, room.id), eq(roomMembers.userId, userId)),
+    );
 
   return c.json({ success: true });
 });
@@ -147,11 +157,13 @@ roomsRoute.get("/user/mine", requireAuth, async (c) => {
       code: rooms.code,
       name: rooms.name,
       hostId: rooms.hostId,
+      hostName: users.name,
       isActive: rooms.isActive,
       createdAt: rooms.createdAt,
     })
     .from(roomMembers)
     .innerJoin(rooms, eq(roomMembers.roomId, rooms.id))
+    .innerJoin(users, eq(rooms.hostId, users.id))
     .where(eq(roomMembers.userId, userId))
     .orderBy(rooms.createdAt);
 
@@ -173,7 +185,7 @@ roomsRoute.get("/user/mine", requireAuth, async (c) => {
         ...r,
         lastTrack: lastTrack ?? null,
       };
-    })
+    }),
   );
 
   return c.json({ rooms: roomsWithLastTrack });
