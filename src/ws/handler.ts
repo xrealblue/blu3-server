@@ -287,32 +287,31 @@ export async function handleWS(ws: any, url: URL) {
             currentPlayback?.videoId &&
             currentPlayback.videoId !== msg.videoId
           ) {
-            // Push old song to persistent database history
-            pushTrackHistory(dbRoom.id, {
-              videoId: currentPlayback.videoId,
-              trackName: currentPlayback.trackName ?? "",
-              artistName: currentPlayback.artistName ?? "",
-              image: currentPlayback.image ?? "",
-            }).catch(console.error);
+            // Only push to history if track was manually skipped (still playing).
+            // If already ended, playback:ended already handled it.
+            if (currentPlayback.isPlaying) {
+              pushTrackHistory(dbRoom.id, {
+                videoId: currentPlayback.videoId,
+                trackName: currentPlayback.trackName ?? "",
+                artistName: currentPlayback.artistName ?? "",
+                image: currentPlayback.image ?? "",
+              }).catch(console.error);
 
-            // Push old song to in-memory recent tracks
-            pushRecentTrack(roomCode, {
-              videoId: currentPlayback.videoId,
-              trackName: currentPlayback.trackName ?? "",
-              artistName: currentPlayback.artistName ?? "",
-              image: currentPlayback.image ?? "",
-              playedAt: Date.now(),
-            });
+              pushRecentTrack(roomCode, {
+                videoId: currentPlayback.videoId,
+                trackName: currentPlayback.trackName ?? "",
+                artistName: currentPlayback.artistName ?? "",
+                image: currentPlayback.image ?? "",
+                playedAt: Date.now(),
+              });
+            }
 
-            // Move old song to bottom of queue
-            const roomObj = getOrCreateRoom(roomCode, dbRoom.hostId);
-            if (roomObj) {
-              const currentTrackIndex = roomObj.queue.findIndex(t => t.videoId === currentPlayback.videoId);
-              if (currentTrackIndex !== -1) {
-                const track = roomObj.queue[currentTrackIndex];
-                roomObj.queue.splice(currentTrackIndex, 1);
-                roomObj.queue.push(track);
-              }
+            // Move old song to bottom of queue via shared helper
+            const oldTrack = getQueue(roomCode).find(
+              (t) => t.videoId === currentPlayback.videoId || t.id === currentPlayback.videoId,
+            );
+            if (oldTrack) {
+              moveQueueTrackToEnd(roomCode, oldTrack.id);
             }
           }
 
@@ -415,14 +414,6 @@ export async function handleWS(ws: any, url: URL) {
           const currentPlayback = getPlayback(roomCode);
           if (!currentPlayback?.videoId) return;
 
-          setPlayback(roomCode, {
-            isPlaying: false,
-            currentTime: Math.max(
-              0,
-              Number(msg.currentTime ?? currentPlayback.currentTime ?? 0),
-            ),
-          });
-
           pushTrackHistory(dbRoom.id, {
             videoId: currentPlayback.videoId,
             trackName: currentPlayback.trackName ?? "",
@@ -436,6 +427,15 @@ export async function handleWS(ws: any, url: URL) {
             artistName: currentPlayback.artistName ?? "",
             image: currentPlayback.image ?? "",
             playedAt: Date.now(),
+          });
+
+          setPlayback(roomCode, {
+            isPlaying: false,
+            videoId: null,
+            currentTime: Math.max(
+              0,
+              Number(msg.currentTime ?? currentPlayback.currentTime ?? 0),
+            ),
           });
           break;
         }
