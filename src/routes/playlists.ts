@@ -143,7 +143,7 @@ async function getAppleMusicToken(): Promise<string | null> {
     });
     if (!mainRes.ok) return null;
     const html = await mainRes.text();
-    const jsUri = html.match(/\/assets\/index-legacy-[^/]+\.js/)?.[0];
+    const jsUri = html.match(/\/assets\/index-legacy[~-][^/]+\.js/)?.[0];
     if (!jsUri) return null;
 
     const jsRes = await fetch(`https://beta.music.apple.com${jsUri}`, {
@@ -153,7 +153,7 @@ async function getAppleMusicToken(): Promise<string | null> {
     });
     if (!jsRes.ok) return null;
     const js = await jsRes.text();
-    const token = js.match(/eyJ[a-zA-Z0-9_-]+?\.[a-zA-Z0-9_-]+?\.[a-zA-Z0-9_-]+/)?.[0];
+    const token = js.match(/['\x60"](eyJ[a-zA-Z0-9_-]+?\.[a-zA-Z0-9_-]+?\.[a-zA-Z0-9_-]+)['\x60"]/)?.[1];
     if (!token) return null;
 
     cachedToken = { token, expiresAt: Date.now() + 10 * 60 * 1000 };
@@ -172,33 +172,42 @@ async function getAppleMusicPlaylistTracks(url: string): Promise<{ name: string;
     const token = await getAppleMusicToken();
     if (!token) return null;
 
-    const apiUrl = `https://amp-api.music.apple.com/v1/catalog/${parts.storefront}/playlists/${parts.playlistId}?include=tracks`;
-    const res = await fetch(apiUrl, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Origin: "https://music.apple.com",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      }
-    });
-    if (!res.ok) return null;
+    const allTracks: ScrapedSpotifyTrack[] = [];
+    let playlistName = "Imported Apple Music Playlist";
+    let offset = 0;
 
-    const data = await res.json();
-    const playlist = data?.data?.[0];
-    if (!playlist) return null;
+    while (true) {
+      const apiUrl = `https://amp-api.music.apple.com/v1/catalog/${parts.storefront}/playlists/${parts.playlistId}?include=tracks&offset=${offset}`;
+      const res = await fetch(apiUrl, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Origin: "https://music.apple.com",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+      });
+      if (!res.ok) return null;
 
-    const playlistName = playlist.attributes?.name || "Imported Apple Music Playlist";
-    const tracksData = playlist.relationships?.tracks?.data || [];
+      const data = await res.json();
+      const playlist = data?.data?.[0];
+      if (!playlist) return null;
 
-    const tracks: ScrapedSpotifyTrack[] = tracksData
-      .filter((item: any) => item.type === "songs")
-      .map((item: any) => ({
-        trackName: item.attributes?.name || "Unknown Track",
-        artistName: item.attributes?.artistName || "Unknown Artist",
-      }));
+      playlistName = playlist.attributes?.name || playlistName;
+      const batch = (playlist.relationships?.tracks?.data || [])
+        .filter((item: any) => item.type === "songs")
+        .map((item: any) => ({
+          trackName: item.attributes?.name || "Unknown Track",
+          artistName: item.attributes?.artistName || "Unknown Artist",
+        }));
 
-    if (tracks.length === 0) return null;
+      allTracks.push(...batch);
 
-    return { name: playlistName, tracks };
+      if (batch.length < 100) break;
+      offset += 100;
+    }
+
+    if (allTracks.length === 0) return null;
+
+    return { name: playlistName, tracks: allTracks };
   } catch (err) {
     console.error("Apple Music scrape failed:", err);
     return null;
