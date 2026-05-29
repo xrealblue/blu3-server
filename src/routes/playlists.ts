@@ -109,6 +109,102 @@ async function getSpotifyPlaylistTracksViaEmbed(playlistId: string): Promise<{ n
   }
 }
 
+interface AppleMusicURLParts {
+  storefront: string;
+  playlistId: string;
+}
+
+function parseAppleMusicURL(url: string): AppleMusicURLParts | null {
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const playlistIdx = segments.findIndex(s => s === "playlist");
+    if (playlistIdx < 1 || playlistIdx >= segments.length - 1) return null;
+    return {
+      storefront: segments[playlistIdx - 1],
+      playlistId: segments[segments.length - 1],
+    };
+  } catch {
+    return null;
+  }
+}
+
+let cachedToken: { token: string; expiresAt: number } | null = null;
+
+async function getAppleMusicToken(): Promise<string | null> {
+  if (cachedToken && Date.now() < cachedToken.expiresAt) {
+    return cachedToken.token;
+  }
+  try {
+    const mainRes = await fetch("https://beta.music.apple.com", {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      }
+    });
+    if (!mainRes.ok) return null;
+    const html = await mainRes.text();
+    const jsUri = html.match(/\/assets\/index-legacy-[^/]+\.js/)?.[0];
+    if (!jsUri) return null;
+
+    const jsRes = await fetch(`https://beta.music.apple.com${jsUri}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      }
+    });
+    if (!jsRes.ok) return null;
+    const js = await jsRes.text();
+    const token = js.match(/eyJ[a-zA-Z0-9_-]+?\.[a-zA-Z0-9_-]+?\.[a-zA-Z0-9_-]+/)?.[0];
+    if (!token) return null;
+
+    cachedToken = { token, expiresAt: Date.now() + 10 * 60 * 1000 };
+    return token;
+  } catch (err) {
+    console.error("Apple Music token fetch failed:", err);
+    return null;
+  }
+}
+
+async function getAppleMusicPlaylistTracks(url: string): Promise<{ name: string; tracks: ScrapedSpotifyTrack[] } | null> {
+  try {
+    const parts = parseAppleMusicURL(url);
+    if (!parts) return null;
+
+    const token = await getAppleMusicToken();
+    if (!token) return null;
+
+    const apiUrl = `https://amp-api.music.apple.com/v1/catalog/${parts.storefront}/playlists/${parts.playlistId}?include=tracks`;
+    const res = await fetch(apiUrl, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Origin: "https://music.apple.com",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      }
+    });
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    const playlist = data?.data?.[0];
+    if (!playlist) return null;
+
+    const playlistName = playlist.attributes?.name || "Imported Apple Music Playlist";
+    const tracksData = playlist.relationships?.tracks?.data || [];
+
+    const tracks: ScrapedSpotifyTrack[] = tracksData
+      .filter((item: any) => item.type === "songs")
+      .map((item: any) => ({
+        trackName: item.attributes?.name || "Unknown Track",
+        artistName: item.attributes?.artistName || "Unknown Artist",
+      }));
+
+    if (tracks.length === 0) return null;
+
+    return { name: playlistName, tracks };
+  } catch (err) {
+    console.error("Apple Music scrape failed:", err);
+    return null;
+  }
+}
+
 // Resolves a track details by name + artist to a playable YouTube video details object (official YTMusic preferred, YouTube fallback)
 async function resolveTrackToOfficialYouTube(
   trackName: string,
@@ -431,7 +527,7 @@ playlistsRoute.post("/liked/toggle", async (c) => {
   }
 });
 
-// POST /api/playlists/import — Import a Spotify or YouTube Music playlist link
+// POST /api/playlists/import — Import a Spotify, YouTube Music, or Apple Music playlist link
 playlistsRoute.post("/import", async (c) => {
   const userId = c.get("userId");
   const { url } = await c.req.json();
@@ -439,9 +535,10 @@ playlistsRoute.post("/import", async (c) => {
 
   const isSpotify = url.includes("spotify.com");
   const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
+  const isAppleMusic = url.includes("music.apple.com");
 
-  if (!isSpotify && !isYouTube) {
-    return c.json({ error: "Invalid playlist URL. Please provide a Spotify or YouTube Music link." }, 400);
+  if (!isSpotify && !isYouTube && !isAppleMusic) {
+    return c.json({ error: "Invalid playlist URL. Please provide a Spotify, YouTube Music, or Apple Music link." }, 400);
   }
 
   try {
@@ -519,6 +616,58 @@ playlistsRoute.post("/import", async (c) => {
       }
 
       return c.json({ playlist: newPlaylist, trackCount: rawVideos.length });
+    } else if (isAppleMusic) {
+      // ── Apple Music Import ──
+      const scraped = await getAppleMusicPlaylistTracks(url);
+      if (!scraped || scraped.tracks.length === 0) {
+        return c.json({ error: "Failed to fetch Apple Music playlist. Ensure the playlist is public." }, 404);
+      }
+
+      const [newPlaylist] = await db
+        .insert(playlists)
+        .values({
+          userId,
+          name: scraped.name,
+          isLiked: false,
+        })
+        .returning();
+
+      const tracksToInsert: any[] = [];
+      const chunks = chunkArray(scraped.tracks, 5);
+      let positionCounter = 0;
+
+      for (const chunk of chunks) {
+        const resolvedList = await Promise.all(
+          chunk.map(async (item: ScrapedSpotifyTrack) => {
+            const resolved = await resolveTrackToOfficialYouTube(
+              item.trackName, item.artistName, "", "", 0, ytmusic
+            );
+            if (resolved.videoId) {
+              return {
+                playlistId: newPlaylist.id,
+                videoId: resolved.videoId,
+                trackName: item.trackName,
+                artistName: item.artistName,
+                image: resolved.image,
+                durationMs: resolved.durationMs,
+              };
+            }
+            return null;
+          })
+        );
+
+        for (const item of resolvedList) {
+          if (item) {
+            tracksToInsert.push({ ...item, position: positionCounter++ });
+          }
+        }
+      }
+
+      if (tracksToInsert.length > 0) {
+        await db.insert(playlistTracks).values(tracksToInsert);
+      }
+
+      return c.json({ playlist: newPlaylist, trackCount: tracksToInsert.length });
     } else {
       // ── Spotify Import ──
       const spotifyRegex = /playlist\/([a-zA-Z0-9]+)/;
