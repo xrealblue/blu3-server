@@ -230,7 +230,7 @@ export function getQueue(code: string): QueueTrack[] {
 export function addToQueue(code: string, track: QueueTrack) {
   const room = rooms.get(code);
   if (!room) return;
-  room.queue.push(track);
+  room.queue.splice(1, 0, track);
 }
 
 export function removeFromQueue(code: string, trackId: string) {
