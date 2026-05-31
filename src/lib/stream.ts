@@ -1,76 +1,106 @@
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 import ytdl from "@distube/ytdl-core";
 import { unifiedGet, unifiedSet, unifiedDel } from "./redis.js";
 import { readFileSync, existsSync } from "node:fs";
 
-/* ─── Cookies agent for ytdl-core ────────────────────── */
+const execAsync = promisify(exec);
+
+/* ─── Cookies (shared by both extractors) ─────────────── */
 let _cookieCount = 0;
 let _cookieSource: string | null = null;
+let _cookiesJson: any = null;
+let _cookiesAgent: ytdl.Agent | undefined;
 
-function loadCookiesAgent(): ytdl.Agent | undefined {
+function loadCookies() {
   try {
     const raw = process.env.YT_COOKIES;
     if (raw) {
-      const cookies = JSON.parse(raw);
-      _cookieCount = Array.isArray(cookies) ? cookies.length : 0;
+      _cookiesJson = JSON.parse(raw);
+      _cookieCount = Array.isArray(_cookiesJson) ? _cookiesJson.length : 0;
       _cookieSource = "YT_COOKIES env var";
-      return ytdl.createAgent(cookies);
-    }
-    const file = process.env.YT_COOKIES_FILE;
-    if (file && existsSync(file)) {
-      const cookies = JSON.parse(readFileSync(file, "utf-8"));
-      _cookieCount = Array.isArray(cookies) ? cookies.length : 0;
-      _cookieSource = `YT_COOKIES_FILE (${file})`;
-      return ytdl.createAgent(cookies);
+    } else {
+      const file = process.env.YT_COOKIES_FILE;
+      if (file && existsSync(file)) {
+        _cookiesJson = JSON.parse(readFileSync(file, "utf-8"));
+        _cookieCount = Array.isArray(_cookiesJson) ? _cookiesJson.length : 0;
+        _cookieSource = `YT_COOKIES_FILE (${file})`;
+      }
     }
   } catch (err) {
     console.error("Failed to load cookies:", err);
   }
+  if (_cookiesJson) {
+    try { _cookiesAgent = ytdl.createAgent(_cookiesJson); } catch {}
+  }
 }
 
-const cookiesAgent = loadCookiesAgent();
+loadCookies();
 
-export function getCookieStatus() {
-  return {
-    hasAgent: !!cookiesAgent,
-    cookieCount: _cookieCount,
-    source: _cookieSource,
-    ytCookiesSet: !!process.env.YT_COOKIES,
-    ytCookiesFileSet: !!process.env.YT_COOKIES_FILE,
-    ytCookiesFileExists:
-      process.env.YT_COOKIES_FILE
-        ? existsSync(process.env.YT_COOKIES_FILE)
-        : false,
-  };
+/* ─── Method 1: yt-dlp (command line, most reliable) ─── */
+async function extractWithYtdlp(videoId: string): Promise<string | null> {
+  try {
+    const cookiesArg =
+      process.env.YT_COOKIES_FILE && existsSync(process.env.YT_COOKIES_FILE)
+        ? ` --cookies "${process.env.YT_COOKIES_FILE}"`
+        : "";
+    const { stdout } = await execAsync(
+      `yt-dlp -g -f "bestaudio" --no-warnings${cookiesArg} ${videoId}`,
+      { encoding: "utf8", timeout: 30000, windowsHide: true },
+    );
+    return stdout?.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
-export async function testExtract(videoId: string) {
-  const start = Date.now();
+/* ─── Method 2: @distube/ytdl-core (pure JS fallback) ─── */
+async function extractWithYtdlCore(videoId: string): Promise<string | null> {
   try {
     const info = await ytdl.getInfo(videoId, {
-      requestOptions: {
-        headers: { "User-Agent": "Mozilla/5.0" },
-      },
-      agent: cookiesAgent,
+      requestOptions: { headers: { "User-Agent": "Mozilla/5.0" } },
+      agent: _cookiesAgent,
     });
-    const elapsed = Date.now() - start;
-    return {
-      ok: true,
-      elapsed,
-      formatCount: info.formats.length,
-      sampleFormats: info.formats.slice(0, 5).map((f) => ({
-        itag: f.itag,
-        mimeType: f.mimeType,
-        bitrate: f.bitrate,
-        hasUrl: !!f.url,
-      })),
-    };
+
+    const strategies = [
+      () => ytdl.chooseFormat(info.formats, { quality: "lowestaudio" }),
+      () => ytdl.chooseFormat(info.formats, { quality: "highestaudio" }),
+      () => ytdl.filterFormats(info.formats, "audioonly")[0],
+      () => info.formats.find((f) => f.hasAudio && f.url),
+      () => info.formats.find((f) => f.mimeType?.startsWith("audio/") && f.url),
+    ];
+
+    for (const fn of strategies) {
+      try {
+        const f = fn();
+        if (f?.url) return f.url;
+      } catch {}
+    }
+
+    return null;
   } catch (err) {
-    return {
-      ok: false,
-      elapsed: Date.now() - start,
-      error: (err as Error)?.message ?? String(err),
-    };
+    return null;
   }
+}
+
+/* ─── Combined extraction ─────────────────────────────── */
+async function doExtract(videoId: string): Promise<string | null> {
+  const existing = pending.get(videoId);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    let url = await extractWithYtdlp(videoId);
+    if (url) {
+      setCache(videoId, url).catch(() => {});
+      return url;
+    }
+    url = await extractWithYtdlCore(videoId);
+    if (url) setCache(videoId, url).catch(() => {});
+    return url;
+  })();
+
+  pending.set(videoId, promise.finally(() => pending.delete(videoId)));
+  return promise;
 }
 
 /* ─── Stream URL cache via Redis + in-memory ─────────── */
@@ -99,61 +129,13 @@ function parseExpire(url: string): number | null {
   return Number(match[1]) * 1000;
 }
 
-/* ─── yt-dlp extractor ───────────────────────────────── */
-
-async function extractWithYtdlp(videoId: string): Promise<string | null> {
-  try {
-    const info = await ytdl.getInfo(videoId, {
-      requestOptions: {
-        headers: { "User-Agent": "Mozilla/5.0" },
-      },
-      agent: cookiesAgent,
-    });
-
-    try {
-      return ytdl.chooseFormat(info.formats, { quality: "lowestaudio" }).url;
-    } catch {}
-
-    const audio = ytdl.filterFormats(info.formats, "audioonly");
-    if (audio.length > 0) return audio[0].url;
-
-    const anyAudio = info.formats.find(
-      (f) => f.mimeType?.startsWith("audio/") && f.url,
-    );
-    if (anyAudio) return anyAudio.url;
-
-    return null;
-  } catch (err) {
-    console.error("yt-dlp extraction failed:", (err as Error)?.message ?? err);
-    return null;
-  }
-}
-
 /* ─── Public API ─────────────────────────────────────── */
-
-async function doExtract(videoId: string): Promise<string | null> {
-  const existing = pending.get(videoId);
-  if (existing) return existing;
-
-  const promise = extractWithYtdlp(videoId)
-    .then((url) => {
-      if (url) setCache(videoId, url).catch(() => {});
-      return url;
-    })
-    .finally(() => {
-      pending.delete(videoId);
-    });
-
-  pending.set(videoId, promise);
-  return promise;
-}
 
 export async function getAudioStreamUrl(
   videoId: string,
 ): Promise<string | null> {
   const cached = await getCached(videoId);
   if (cached) return cached;
-
   return doExtract(videoId);
 }
 
@@ -161,6 +143,47 @@ export async function preloadStream(videoId: string): Promise<void> {
   const cached = await getCached(videoId);
   if (cached) return;
   if (pending.has(videoId)) return;
-
   doExtract(videoId).catch(() => {});
+}
+
+/* ─── Debug helpers ───────────────────────────────────── */
+
+export function getCookieStatus() {
+  return {
+    hasAgent: !!_cookiesAgent,
+    cookieCount: _cookieCount,
+    source: _cookieSource,
+    ytCookiesSet: !!process.env.YT_COOKIES,
+    ytCookiesFileSet: !!process.env.YT_COOKIES_FILE,
+    ytCookiesFileExists: process.env.YT_COOKIES_FILE
+      ? existsSync(process.env.YT_COOKIES_FILE)
+      : false,
+  };
+}
+
+export async function testExtract(videoId: string) {
+  const result: Record<string, any> = {};
+
+  // Test yt-dlp
+  const dlpStart = Date.now();
+  const dlpUrl = await extractWithYtdlp(videoId);
+  result.ytdlp = {
+    ok: !!dlpUrl,
+    elapsed: Date.now() - dlpStart,
+    hasUrl: !!dlpUrl,
+  };
+
+  // Test ytdl-core
+  const coreStart = Date.now();
+  const coreUrl = await extractWithYtdlCore(videoId);
+  result.ytdlcore = {
+    ok: !!coreUrl,
+    elapsed: Date.now() - coreStart,
+    hasUrl: !!coreUrl,
+  };
+
+  return {
+    cookies: getCookieStatus(),
+    extract: result,
+  };
 }
