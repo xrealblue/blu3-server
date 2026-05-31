@@ -1,4 +1,5 @@
-import { Innertube } from "youtubei.js";
+import { Innertube, Platform } from "youtubei.js";
+import vm from "node:vm";
 import { unifiedGet, unifiedSet, unifiedDel } from "./redis.js";
 import { readFileSync, existsSync } from "node:fs";
 
@@ -60,6 +61,21 @@ function loadCookieString(): string | undefined {
   }
   return undefined;
 }
+
+// Override youtubei.js's default JS evaluator with Node.js vm for signature deciphering
+Platform.shim.eval = async (data, env) => {
+  const context = vm.createContext({
+    Object, Array, String, Number, Boolean, BigInt,
+    Math, JSON, RegExp, Map, Set, WeakMap, WeakSet, Promise,
+    Error, TypeError, RangeError, ReferenceError, SyntaxError, EvalError, URIError,
+    parseInt, parseFloat, isNaN, isFinite, decodeURI, encodeURI,
+    encodeURIComponent, decodeURIComponent, escape, unescape,
+    URL, URLSearchParams,
+    console, setTimeout, clearTimeout, setInterval, clearInterval, Buffer,
+    Symbol, Reflect, Proxy, Date,
+  });
+  return vm.runInContext(data.output, context);
+};
 
 async function getInnertube(): Promise<Innertube> {
   if (_innertube) return _innertube;
