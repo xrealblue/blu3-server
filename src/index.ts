@@ -97,11 +97,16 @@ app.get("/api/search", async (c) => {
   }
 });
 
-app.get("/stream/:encryptedId", async (c) => {
-  const { encryptedId } = c.req.param();
-  if (!encryptedId) return c.json({ error: "Missing id" }, 400);
+app.get("/stream/:id", async (c) => {
+  const { id } = c.req.param();
+  if (!id) return c.json({ error: "Missing id" }, 400);
   try {
-    const videoId = decrypt(encryptedId);
+    let videoId: string;
+    try {
+      videoId = decrypt(id);
+    } catch {
+      videoId = id;
+    }
     if (!videoId) return c.json({ error: "Invalid id" }, 400);
     const audioUrl = await getAudioStreamUrl(videoId);
     if (!audioUrl) return c.json({ error: "Stream not available" }, 503);
