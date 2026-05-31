@@ -23,10 +23,12 @@ function parseNetscape(raw: string): string | undefined {
   if (!raw.startsWith("#") && raw.includes("=")) {
     return raw;
   }
-  const lines = raw.split("\n").filter((l) => !l.startsWith("#") && l.trim());
+  const lines = raw.replace(/\r/g, "").split("\n").filter((l) => l.trim());
   const cookies: string[] = [];
   for (const line of lines) {
-    const parts = line.split("\t");
+    const cleaned = line.startsWith("#HttpOnly_") ? line.slice(10) : line;
+    if (cleaned.startsWith("#")) continue;
+    const parts = cleaned.split("\t");
     if (parts.length >= 7) {
       cookies.push(`${parts[5]}=${parts[6]}`);
     }
