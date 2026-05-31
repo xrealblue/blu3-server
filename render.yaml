@@ -26,6 +26,7 @@ services:
         sync: false
       - key: YT_COOKIES_FILE
         value: ./cookies.json
+      # client needs NEXT_PUBLIC_STREAM_URL set to this server's URL in production
     plan: standard
     autoDeploy: true
     healthCheckPath: /health
