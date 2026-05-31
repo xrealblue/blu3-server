@@ -1,4 +1,4 @@
-import { Innertube, type Format } from "youtubei.js";
+import { Innertube } from "youtubei.js";
 import { unifiedGet, unifiedSet, unifiedDel } from "./redis.js";
 import { readFileSync, existsSync } from "node:fs";
 
