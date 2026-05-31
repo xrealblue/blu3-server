@@ -97,6 +97,20 @@ app.get("/api/search", async (c) => {
   }
 });
 
+app.get("/stream/:encryptedId", async (c) => {
+  const { encryptedId } = c.req.param();
+  if (!encryptedId) return c.json({ error: "Missing id" }, 400);
+  try {
+    const videoId = decrypt(encryptedId);
+    if (!videoId) return c.json({ error: "Invalid id" }, 400);
+    const audioUrl = await getAudioStreamUrl(videoId);
+    if (!audioUrl) return c.json({ error: "Stream not available" }, 503);
+    return c.redirect(audioUrl, 302);
+  } catch {
+    return c.json({ error: "Stream failed" }, 500);
+  }
+});
+
 app.get("/api/suggest", async (c) => {
   const q = c.req.query("q");
   if (!q?.trim()) return c.json({ suggestions: [] });
