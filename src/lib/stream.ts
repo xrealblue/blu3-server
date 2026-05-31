@@ -1,13 +1,8 @@
-import { Innertube } from "youtubei.js";
 import { exec } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { unifiedGet, unifiedSet, unifiedDel } from "./redis.js";
 
 const execAsync = promisify(exec);
-
-let innertube: Innertube | null = null;
 
 /* ─── Stream URL cache via Redis + in-memory ─────────── */
 const CACHE_PREFIX = "stream:";
@@ -34,67 +29,13 @@ function parseExpire(url: string): number | null {
   return Number(match[1]) * 1000;
 }
 
-/* ─── Cookie helpers ─────────────────────────────────── */
-
-function getCookieHeader(): string {
-  if (process.env.YT_COOKIES) return process.env.YT_COOKIES;
-  const jsonPath = resolve(
-    process.cwd(),
-    process.env.YT_COOKIES_FILE ?? "cookies.json",
-  );
-  if (!existsSync(jsonPath)) return "";
-  try {
-    const raw = readFileSync(jsonPath, "utf8");
-    const cookies: { name: string; value: string }[] = JSON.parse(raw);
-    return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
-  } catch {
-    return "";
-  }
-}
-
-/* ─── Extractors ─────────────────────────────────────── */
-
-async function getInnertube(timeoutMs = 15_000): Promise<Innertube | null> {
-  if (innertube) return innertube;
-  try {
-    innertube = await Promise.race([
-      Innertube.create({ cookie: getCookieHeader() }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Innertube create timeout")), timeoutMs),
-      ),
-    ]);
-  } catch {
-    return null;
-  }
-  return innertube;
-}
-
-async function extractWithYoutubei(videoId: string): Promise<string | null> {
-  try {
-    const yt = await getInnertube();
-    if (!yt) return null;
-    const info = await yt.getInfo(videoId);
-    const format = info.chooseFormat({ type: "audio", quality: "best" });
-    if (format?.url) return format.url;
-    const formats = info.streaming_data?.adaptive_formats ?? [];
-    const audioFormats = formats.filter(
-      (f: any) => f.has_audio && !f.has_video,
-    );
-    audioFormats.sort((a: any, b: any) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
-    for (const f of audioFormats) {
-      if (f.url) return f.url;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
+/* ─── yt-dlp extractor ───────────────────────────────── */
 
 async function extractWithYtdlp(videoId: string): Promise<string | null> {
   try {
     const { stdout } = await execAsync(
       `yt-dlp -g -f "bestaudio[abr<=64][ext=m4a]/bestaudio[abr<=64]/bestaudio[ext=m4a]" --no-warnings ${videoId}`,
-      { encoding: "utf8", timeout: 15000, windowsHide: true },
+      { encoding: "utf8", timeout: 10000, windowsHide: true },
     );
     return stdout?.trim() || null;
   } catch {
@@ -110,19 +51,11 @@ export async function getAudioStreamUrl(
   const cached = await getCached(videoId);
   if (cached) return cached;
 
-  const fromYt = await extractWithYoutubei(videoId);
-  if (fromYt) {
-    await setCache(videoId, fromYt);
-    return fromYt;
+  const url = await extractWithYtdlp(videoId);
+  if (url) {
+    await setCache(videoId, url);
   }
-
-  const fromDlp = await extractWithYtdlp(videoId);
-  if (fromDlp) {
-    await setCache(videoId, fromDlp);
-    return fromDlp;
-  }
-
-  return null;
+  return url;
 }
 
 export async function preloadStream(videoId: string): Promise<void> {
