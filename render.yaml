@@ -3,7 +3,7 @@ services:
     name: blu3-server
     env: node
     rootDir: blu3-server
-    buildCommand: pip install yt-dlp && bun install --frozen-lockfile && bun run build
+    buildCommand: bun install --frozen-lockfile && bun run build
     startCommand: bun run start
     envVars:
       - key: NODE_ENV

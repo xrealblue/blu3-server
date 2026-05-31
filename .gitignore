@@ -13,6 +13,7 @@ node_modules/
 
 # generated
 cookies.txt
+.bin/
 
 # env
 .env

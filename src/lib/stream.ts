@@ -3,8 +3,19 @@ import { promisify } from "node:util";
 import ytdl from "@distube/ytdl-core";
 import { unifiedGet, unifiedSet, unifiedDel } from "./redis.js";
 import { readFileSync, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const execAsync = promisify(exec);
+
+/* ─── Find yt-dlp binary ──────────────────────────────── */
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(__dirname, "..", "..");
+const BIN_DIR = join(ROOT, ".bin");
+const BIN_NAME = process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
+const YT_DLP_BIN = existsSync(join(BIN_DIR, BIN_NAME))
+  ? join(BIN_DIR, BIN_NAME)
+  : "yt-dlp";
 
 /* ─── Cookies (shared by both extractors) ─────────────── */
 let _cookieCount = 0;
@@ -45,7 +56,7 @@ async function extractWithYtdlp(videoId: string): Promise<string | null> {
         ? ` --cookies "${process.env.YT_COOKIES_FILE}"`
         : "";
     const { stdout } = await execAsync(
-      `yt-dlp -g -f "bestaudio" --no-warnings${cookiesArg} ${videoId}`,
+      `"${YT_DLP_BIN}" -g -f "bestaudio" --no-warnings${cookiesArg} ${videoId}`,
       { encoding: "utf8", timeout: 30000, windowsHide: true },
     );
     return stdout?.trim() || null;
@@ -78,29 +89,9 @@ async function extractWithYtdlCore(videoId: string): Promise<string | null> {
     }
 
     return null;
-  } catch (err) {
+  } catch {
     return null;
   }
-}
-
-/* ─── Combined extraction ─────────────────────────────── */
-async function doExtract(videoId: string): Promise<string | null> {
-  const existing = pending.get(videoId);
-  if (existing) return existing;
-
-  const promise = (async () => {
-    let url = await extractWithYtdlp(videoId);
-    if (url) {
-      setCache(videoId, url).catch(() => {});
-      return url;
-    }
-    url = await extractWithYtdlCore(videoId);
-    if (url) setCache(videoId, url).catch(() => {});
-    return url;
-  })();
-
-  pending.set(videoId, promise.finally(() => pending.delete(videoId)));
-  return promise;
 }
 
 /* ─── Stream URL cache via Redis + in-memory ─────────── */
@@ -127,6 +118,26 @@ function parseExpire(url: string): number | null {
   const match = url.match(/[?&]expire=(\d+)/);
   if (!match) return null;
   return Number(match[1]) * 1000;
+}
+
+/* ─── Combined extraction ─────────────────────────────── */
+async function doExtract(videoId: string): Promise<string | null> {
+  const existing = pending.get(videoId);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    let url = await extractWithYtdlp(videoId);
+    if (url) {
+      setCache(videoId, url).catch(() => {});
+      return url;
+    }
+    url = await extractWithYtdlCore(videoId);
+    if (url) setCache(videoId, url).catch(() => {});
+    return url;
+  })();
+
+  pending.set(videoId, promise.finally(() => pending.delete(videoId)));
+  return promise;
 }
 
 /* ─── Public API ─────────────────────────────────────── */
@@ -158,32 +169,30 @@ export function getCookieStatus() {
     ytCookiesFileExists: process.env.YT_COOKIES_FILE
       ? existsSync(process.env.YT_COOKIES_FILE)
       : false,
+    ytDlpBin: YT_DLP_BIN,
+    ytDlpExists: existsSync(YT_DLP_BIN) || YT_DLP_BIN === "yt-dlp",
   };
 }
 
 export async function testExtract(videoId: string) {
-  const result: Record<string, any> = {};
-
-  // Test yt-dlp
   const dlpStart = Date.now();
   const dlpUrl = await extractWithYtdlp(videoId);
-  result.ytdlp = {
-    ok: !!dlpUrl,
-    elapsed: Date.now() - dlpStart,
-    hasUrl: !!dlpUrl,
-  };
-
-  // Test ytdl-core
   const coreStart = Date.now();
   const coreUrl = await extractWithYtdlCore(videoId);
-  result.ytdlcore = {
-    ok: !!coreUrl,
-    elapsed: Date.now() - coreStart,
-    hasUrl: !!coreUrl,
-  };
 
   return {
     cookies: getCookieStatus(),
-    extract: result,
+    extract: {
+      ytdlp: {
+        ok: !!dlpUrl,
+        elapsed: coreStart - dlpStart,
+        hasUrl: !!dlpUrl,
+      },
+      ytdlcore: {
+        ok: !!coreUrl,
+        elapsed: Date.now() - coreStart,
+        hasUrl: !!coreUrl,
+      },
+    },
   };
 }
