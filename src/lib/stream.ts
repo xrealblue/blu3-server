@@ -1,8 +1,26 @@
-import { exec } from "node:child_process";
-import { promisify } from "node:util";
+import ytdl from "@distube/ytdl-core";
 import { unifiedGet, unifiedSet, unifiedDel } from "./redis.js";
+import { readFileSync, existsSync } from "node:fs";
 
-const execAsync = promisify(exec);
+/* ─── Cookies agent for ytdl-core ────────────────────── */
+function loadCookiesAgent(): ytdl.Agent | undefined {
+  try {
+    const raw = process.env.YT_COOKIES;
+    if (raw) {
+      const cookies = JSON.parse(raw);
+      return ytdl.createAgent(cookies);
+    }
+    const file = process.env.YT_COOKIES_FILE;
+    if (file && existsSync(file)) {
+      const cookies = JSON.parse(readFileSync(file, "utf-8"));
+      return ytdl.createAgent(cookies);
+    }
+  } catch (err) {
+    console.error("Failed to load cookies:", err);
+  }
+}
+
+const cookiesAgent = loadCookiesAgent();
 
 /* ─── Stream URL cache via Redis + in-memory ─────────── */
 const CACHE_PREFIX = "stream:";
@@ -34,13 +52,26 @@ function parseExpire(url: string): number | null {
 
 async function extractWithYtdlp(videoId: string): Promise<string | null> {
   try {
-    const cookiesFile = process.env.YT_COOKIES_FILE;
-    const cookiesArg = cookiesFile ? ` --cookies "${cookiesFile}"` : "";
-    const { stdout } = await execAsync(
-      `yt-dlp -g -f "bestaudio" --no-warnings${cookiesArg} ${videoId}`,
-      { encoding: "utf8", timeout: 30000, windowsHide: true },
+    const info = await ytdl.getInfo(videoId, {
+      requestOptions: {
+        headers: { "User-Agent": "Mozilla/5.0" },
+      },
+      agent: cookiesAgent,
+    });
+
+    try {
+      return ytdl.chooseFormat(info.formats, { quality: "lowestaudio" }).url;
+    } catch {}
+
+    const audio = ytdl.filterFormats(info.formats, "audioonly");
+    if (audio.length > 0) return audio[0].url;
+
+    const anyAudio = info.formats.find(
+      (f) => f.mimeType?.startsWith("audio/") && f.url,
     );
-    return stdout?.trim() || null;
+    if (anyAudio) return anyAudio.url;
+
+    return null;
   } catch (err) {
     console.error("yt-dlp extraction failed:", (err as Error)?.message ?? err);
     return null;
