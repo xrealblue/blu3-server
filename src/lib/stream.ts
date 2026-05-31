@@ -1,9 +1,11 @@
-import { Innertube } from "youtubei.js";
+import { Innertube, type Format } from "youtubei.js";
 import { unifiedGet, unifiedSet, unifiedDel } from "./redis.js";
 import { readFileSync, existsSync } from "node:fs";
 
 const CACHE_PREFIX = "stream:";
 const pending = new Map<string, Promise<string | null>>();
+
+const CLIENTS = ["TV_EMBEDDED", "ANDROID", "WEB"] as const;
 
 let _innertube: Innertube | null = null;
 let _cookieSource: string | null = null;
@@ -56,7 +58,9 @@ async function getInnertube(): Promise<Innertube> {
 
   const cookie = loadCookieString();
 
-  const config: Record<string, any> = {};
+  const config: Record<string, any> = {
+    client_type: "TV_EMBEDDED",
+  };
   if (cookie) {
     config.cookie = cookie;
     _cookieLogin = true;
@@ -88,28 +92,47 @@ function parseExpire(url: string): number | null {
   return Number(match[1]) * 1000;
 }
 
+async function tryExtract(videoId: string, client: string): Promise<string | null> {
+  const yt = await getInnertube();
+
+  const info = await yt.getBasicInfo(videoId, { client: client as any });
+
+  const formats = info.streaming_data?.adaptive_formats ?? [];
+
+  for (const f of formats) {
+    if (!f.has_audio || f.has_video) continue;
+
+    if (f.url) return f.url;
+
+    if (f.cipher || f.signature_cipher) {
+      const player = yt.actions.session.player;
+      if (player) {
+        const deciphered = await f.decipher(player);
+        if (deciphered) return deciphered;
+      }
+    }
+  }
+
+  return null;
+}
+
 async function doExtract(videoId: string): Promise<string | null> {
   const existing = pending.get(videoId);
   if (existing) return existing;
 
   const promise = (async () => {
-    try {
-      const yt = await getInnertube();
-      const format = await yt.getStreamingData(videoId, {
-        type: "audio",
-        quality: "best",
-      });
-
-      const url = format?.url;
-      if (url) {
-        setCache(videoId, url).catch(() => {});
-        return url;
+    for (const client of CLIENTS) {
+      try {
+        const url = await tryExtract(videoId, client);
+        if (url) {
+          setCache(videoId, url).catch(() => {});
+          return url;
+        }
+      } catch (err) {
+        console.error(`stream extract: client=${client} videoId=${videoId}:`, err);
       }
-      return null;
-    } catch (err) {
-      console.error(`stream extract error for ${videoId}:`, err);
-      return null;
     }
+    return null;
   })();
 
   pending.set(videoId, promise.finally(() => pending.delete(videoId)));
