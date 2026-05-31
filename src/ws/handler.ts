@@ -91,31 +91,41 @@ function canControlPlayback(roomCode: string, hostId: string, userId: string) {
   return !isHostActive || hostId === userId;
 }
 
-async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
-  try {
-    await db.delete(roomQueue).where(eq(roomQueue.roomId, roomId));
-
-    if (queue.length > 0) {
-      const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
-      await db.insert(roomQueue).values(
-        queue.map((track, index) => ({
-          id: isUuid(track.id) ? track.id : undefined,
-          roomId,
-          videoId: track.videoId,
-          trackName: track.name,
-          artistName: track.artists?.[0]?.name ?? "Unknown",
-          image: track.image ?? "",
-          durationMs: track.duration_ms ?? 0,
-          position: index,
-        }))
-      );
-    }
-  } catch (err) {
-    console.error("Failed to sync queue to database:", err);
-  }
-}
-
 const syncDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const syncLocks = new Map<string, Promise<void>>();
+
+async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
+  while (syncLocks.has(roomId)) {
+    try { await syncLocks.get(roomId); } catch { /* ignore */ }
+  }
+  const promise = (async () => {
+    try {
+      await db.delete(roomQueue).where(eq(roomQueue.roomId, roomId));
+
+      if (queue.length > 0) {
+        const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+        await db.insert(roomQueue).values(
+          queue.map((track, index) => ({
+            id: isUuid(track.id) ? track.id : undefined,
+            roomId,
+            videoId: track.videoId,
+            trackName: track.name,
+            artistName: track.artists?.[0]?.name ?? "Unknown",
+            image: track.image ?? "",
+            durationMs: track.duration_ms ?? 0,
+            position: index,
+          }))
+        );
+      }
+    } catch (err) {
+      console.error("Failed to sync queue to database:", err);
+    } finally {
+      syncLocks.delete(roomId);
+    }
+  })();
+  syncLocks.set(roomId, promise);
+  await promise;
+}
 
 function scheduleQueueSync(roomId: string, roomCode: string, immediate = false) {
   const existing = syncDebounceTimers.get(roomId);
