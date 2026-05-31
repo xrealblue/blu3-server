@@ -28,12 +28,21 @@ function parseNetscape(raw: string): string | undefined {
   for (const line of lines) {
     const cleaned = line.startsWith("#HttpOnly_") ? line.slice(10) : line;
     if (cleaned.startsWith("#")) continue;
-    const parts = cleaned.split("\t");
+
+    let parts = cleaned.split("\t");
+    if (parts.length < 7) {
+      parts = cleaned.split(/\s+/);
+    }
     if (parts.length >= 7) {
       cookies.push(`${parts[5]}=${parts[6]}`);
     }
   }
-  if (cookies.length > 0) return cookies.join("; ");
+  if (cookies.length > 0) {
+    console.log(`[Cookies] Parsed ${cookies.length} cookies from ${_cookieSource || "unknown source"}`);
+    console.log(`[Cookies] Sample: ${cookies[0]}`);
+    return cookies.join("; ");
+  }
+  console.warn(`[Cookies] No cookies parsed from ${_cookieSource || "unknown source"} — first 100 chars: ${raw.slice(0, 100).replace(/\n/g, "\\n")}`);
   return undefined;
 }
 
@@ -41,17 +50,13 @@ function loadCookieString(): string | undefined {
   const raw = process.env.YT_COOKIES;
   if (raw) {
     _cookieSource = "YT_COOKIES env var";
-    const parsed = parseNetscape(raw);
-    if (parsed) return parsed;
-    return raw;
+    return parseNetscape(raw);
   }
   const file = process.env.YT_COOKIES_FILE;
   if (file && existsSync(file)) {
     const content = readFileSync(file, "utf-8").trim();
     _cookieSource = `YT_COOKIES_FILE (${file})`;
-    const parsed = parseNetscape(content);
-    if (parsed) return parsed;
-    return content;
+    return parseNetscape(content);
   }
   return undefined;
 }
