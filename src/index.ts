@@ -11,7 +11,7 @@ import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic } from "./lib/ytmusic.js";
 import { encrypt } from "./lib/crypto.js";
-/* OLD: import { getAudioStreamUrl, getCookieStatus, testExtract } from "./lib/stream.js"; — replaced by YT iframe */
+import { getAudioStreamUrl, getCookieStatus, testExtract, invalidateCache } from "./lib/stream.js";
 
 const getCorsOrigins = (): string[] => {
   const originsEnv = process.env.CORS_ORIGINS;
@@ -99,10 +99,36 @@ app.get("/api/search", async (c) => {
   }
 });
 
-/* OLD: stream extraction endpoints — replaced by YT iframe
-app.get("/debug/stream", async (c) => { ... });
-app.get("/stream/:id", async (c) => { ... });
-*/
+app.get("/debug/stream", async (c) => {
+  const videoId = c.req.query("v");
+  if (!videoId) return c.json({ error: "?v=VIDEO_ID required" }, 400);
+  const result = await testExtract(videoId);
+  return c.json(result);
+});
+
+app.get("/stream/:id", async (c) => {
+  const videoId = c.req.param("id");
+  if (!videoId) return c.json({ error: "Missing video id" }, 400);
+
+  let url: string | null = null;
+  try {
+    url = await getAudioStreamUrl(videoId);
+  } catch (err) {
+    console.error("Stream error:", err);
+    return c.json({ error: "Failed to get stream" }, 500);
+  }
+
+  if (!url) {
+    return c.json({ error: "Stream not found" }, 404);
+  }
+
+  const invalidate = c.req.query("invalidate");
+  if (invalidate) {
+    invalidateCache(videoId).catch(() => {});
+  }
+
+  return c.redirect(url, 302);
+});
 
 
 app.get("/api/suggest", async (c) => {
