@@ -29,4 +29,4 @@ services:
       # client needs NEXT_PUBLIC_STREAM_URL set to this server's URL in production
     plan: standard
     autoDeploy: true
-    healthCheckPath: /health
+    healthCheckPath: /health  

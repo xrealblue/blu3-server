@@ -34,12 +34,15 @@ function parseExpire(url: string): number | null {
 
 async function extractWithYtdlp(videoId: string): Promise<string | null> {
   try {
+    const cookiesFile = process.env.YT_COOKIES_FILE;
+    const cookiesArg = cookiesFile ? ` --cookies "${cookiesFile}"` : "";
     const { stdout } = await execAsync(
-      `yt-dlp -g -f "bestaudio" --no-warnings ${videoId}`,
-      { encoding: "utf8", timeout: 10000, windowsHide: true },
+      `yt-dlp -g -f "bestaudio" --no-warnings${cookiesArg} ${videoId}`,
+      { encoding: "utf8", timeout: 30000, windowsHide: true },
     );
     return stdout?.trim() || null;
-  } catch {
+  } catch (err) {
+    console.error("yt-dlp extraction failed:", (err as Error)?.message ?? err);
     return null;
   }
 }
