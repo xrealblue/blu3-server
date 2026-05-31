@@ -10,7 +10,7 @@ import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic } from "./lib/ytmusic.js";
-import { decrypt } from "./lib/crypto.js";
+import { encrypt, decrypt } from "./lib/crypto.js";
 import { getAudioStreamUrl } from "./lib/stream.js";
 
 const getCorsOrigins = (): string[] => {
@@ -78,6 +78,7 @@ app.get("/api/search", async (c) => {
         const thumbs = r.thumbnails ?? [];
         const rawThumb = thumbs[thumbs.length - 1]?.url ?? "";
         const image = rawThumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj");
+        const encryptedId = encrypt(r.videoId);
         return {
           id: r.videoId,
           videoId: r.videoId,
@@ -87,6 +88,7 @@ app.get("/api/search", async (c) => {
           artists: r.artist ? [{ name: r.artist.name }] : [],
           album: { name: r.album?.name ?? "" },
           image,
+          downloadUrl: encryptedId,
         };
       });
     return c.json({ tracks });

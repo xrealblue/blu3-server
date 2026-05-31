@@ -69,6 +69,7 @@ type IncomingMessage =
   | { type: "playback:ended"; currentTime?: number }
   | { type: "playback:mode"; shuffle?: boolean; repeatMode?: RepeatMode }
   | { type: "playback:sync_request" }
+  | { type: "progress"; currentTime: number }
   | { type: "queue:add"; track: QueueTrack }
   | { type: "queue:remove"; trackId: string }
   | { type: "queue:cycle_current"; trackId: string }
@@ -429,14 +430,50 @@ export async function handleWS(ws: any, url: URL) {
             playedAt: Date.now(),
           });
 
-          setPlayback(roomCode, {
-            isPlaying: false,
-            videoId: null,
-            currentTime: Math.max(
-              0,
-              Number(msg.currentTime ?? currentPlayback.currentTime ?? 0),
-            ),
-          });
+          moveQueueTrackToEnd(roomCode, currentPlayback.videoId || "");
+
+          const queue = getQueue(roomCode);
+          const nextTrack = queue.length > 0 ? queue[0] : null;
+
+          if (nextTrack) {
+            const leadMs = DEFAULT_PLAY_SCHEDULE_LEAD_MS;
+            const targetTime = Date.now() + leadMs;
+            const seekTo = 0;
+
+            setPlayback(roomCode, {
+              videoId: nextTrack.videoId,
+              trackName: nextTrack.name,
+              artistName: nextTrack.artists?.[0]?.name ?? "",
+              image: nextTrack.image ?? "",
+              isPlaying: true,
+              currentTime: seekTo,
+              updatedAt: targetTime,
+            });
+
+            broadcast(roomCode, {
+              type: "schedule_play",
+              videoId: nextTrack.videoId,
+              seekTo,
+              targetTime,
+              id: nextTrack.id,
+              trackName: nextTrack.name,
+              artistName: nextTrack.artists?.[0]?.name ?? "",
+              image: nextTrack.image ?? "",
+              duration_ms: nextTrack.duration_ms ?? 0,
+              recentTracks: getRecentTracks(roomCode),
+            });
+
+            scheduleQueueSync(dbRoom.id, roomCode, true);
+          } else {
+            setPlayback(roomCode, {
+              isPlaying: false,
+              videoId: null,
+              currentTime: Math.max(
+                0,
+                Number(msg.currentTime ?? currentPlayback.currentTime ?? 0),
+              ),
+            });
+          }
           break;
         }
         case "playback:mode": {
@@ -451,6 +488,16 @@ export async function handleWS(ws: any, url: URL) {
             type: "room:playback_mode",
             playbackMode: getPlaybackMode(roomCode),
           });
+          break;
+        }
+        case "progress": {
+          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
+          const playback = getPlayback(roomCode);
+          if (playback) {
+            setPlayback(roomCode, {
+              currentTime: Math.max(0, Number(msg.currentTime ?? 0)),
+            });
+          }
           break;
         }
         case "playback:sync_request": {
