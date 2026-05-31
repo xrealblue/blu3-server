@@ -11,6 +11,9 @@
 # deps
 node_modules/
 
+# generated
+cookies.txt
+
 # env
 .env
 .env.production

@@ -31,8 +31,8 @@ let distEntry = getDistEntry();
 
 if (!distEntry) {
   console.warn("dist/index.js not found, running build before start...");
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const buildStatus = run(npmCommand, ["run", "build"]);
+  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+  const buildStatus = run(npmCmd, ["run", "build"]);
   if (buildStatus !== 0) {
     process.exit(buildStatus);
   }

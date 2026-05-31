@@ -3,7 +3,7 @@ services:
     name: blu3-server
     env: node
     rootDir: blu3-server
-    buildCommand: bun install --frozen-lockfile && bun run build
+    buildCommand: pip install yt-dlp && bun install --frozen-lockfile && bun run build
     startCommand: bun run start
     envVars:
       - key: NODE_ENV
@@ -20,6 +20,12 @@ services:
         sync: false
       - key: BACKEND_URL
         sync: false
+      - key: CRYPTO_KEY
+        sync: false
+      - key: YT_COOKIES
+        sync: false
+      - key: YT_COOKIES_FILE
+        value: ./cookies.json
     plan: standard
     autoDeploy: true
     healthCheckPath: /health
