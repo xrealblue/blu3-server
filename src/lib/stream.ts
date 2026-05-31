@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from "node:fs";
 const CACHE_PREFIX = "stream:";
 const pending = new Map<string, Promise<string | null>>();
 
-const CLIENTS = ["TV_EMBEDDED", "ANDROID", "WEB"] as const;
+const CLIENTS = ["TV_EMBEDDED", "ANDROID", "TV", "ANDROID_VR", "TV_SIMPLY", "WEB"] as const;
 
 let _innertube: Innertube | null = null;
 let _cookieSource: string | null = null;
@@ -58,9 +58,7 @@ async function getInnertube(): Promise<Innertube> {
 
   const cookie = loadCookieString();
 
-  const config: Record<string, any> = {
-    client_type: "TV_EMBEDDED",
-  };
+  const config: Record<string, any> = {};
   if (cookie) {
     config.cookie = cookie;
     _cookieLogin = true;
@@ -94,8 +92,20 @@ function parseExpire(url: string): number | null {
 
 async function tryExtract(videoId: string, client: string): Promise<string | null> {
   const yt = await getInnertube();
+  const override = client as any;
 
-  const info = await yt.getBasicInfo(videoId, { client: client as any });
+  let info: any;
+  try {
+    info = await yt.getBasicInfo(videoId, { client: override });
+  } catch (err: any) {
+    if (err.info?.status === 'ERROR') {
+      console.error(`stream extract: client=${client}: playability_status=ERROR reason="${err.info?.reason}" embeddable=${err.info?.embeddable}`);
+    }
+    throw err;
+  }
+
+  const ps = info.playability_status;
+  console.log(`stream extract: client=${client}: status=${ps?.status} has_streaming=${!!info.streaming_data} formats=${info.streaming_data?.adaptive_formats?.length ?? 0}`);
 
   const formats = info.streaming_data?.adaptive_formats ?? [];
 
