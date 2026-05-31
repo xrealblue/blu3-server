@@ -11,7 +11,7 @@ import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic } from "./lib/ytmusic.js";
 import { encrypt, decrypt } from "./lib/crypto.js";
-import { getAudioStreamUrl } from "./lib/stream.js";
+import { getAudioStreamUrl, getCookieStatus, testExtract } from "./lib/stream.js";
 
 const getCorsOrigins = (): string[] => {
   const originsEnv = process.env.CORS_ORIGINS;
@@ -97,6 +97,15 @@ app.get("/api/search", async (c) => {
     resetYTMusic();
     return c.json({ error: "Search failed" }, 500);
   }
+});
+
+app.get("/debug/stream", async (c) => {
+  const videoId = c.req.query("videoId") || "dQw4w9WgXcQ";
+  const extractResult = await testExtract(videoId);
+  return c.json({
+    cookies: getCookieStatus(),
+    extract: extractResult,
+  });
 });
 
 app.get("/stream/:id", async (c) => {

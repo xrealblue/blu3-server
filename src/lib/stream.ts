@@ -3,16 +3,23 @@ import { unifiedGet, unifiedSet, unifiedDel } from "./redis.js";
 import { readFileSync, existsSync } from "node:fs";
 
 /* ─── Cookies agent for ytdl-core ────────────────────── */
+let _cookieCount = 0;
+let _cookieSource: string | null = null;
+
 function loadCookiesAgent(): ytdl.Agent | undefined {
   try {
     const raw = process.env.YT_COOKIES;
     if (raw) {
       const cookies = JSON.parse(raw);
+      _cookieCount = Array.isArray(cookies) ? cookies.length : 0;
+      _cookieSource = "YT_COOKIES env var";
       return ytdl.createAgent(cookies);
     }
     const file = process.env.YT_COOKIES_FILE;
     if (file && existsSync(file)) {
       const cookies = JSON.parse(readFileSync(file, "utf-8"));
+      _cookieCount = Array.isArray(cookies) ? cookies.length : 0;
+      _cookieSource = `YT_COOKIES_FILE (${file})`;
       return ytdl.createAgent(cookies);
     }
   } catch (err) {
@@ -21,6 +28,50 @@ function loadCookiesAgent(): ytdl.Agent | undefined {
 }
 
 const cookiesAgent = loadCookiesAgent();
+
+export function getCookieStatus() {
+  return {
+    hasAgent: !!cookiesAgent,
+    cookieCount: _cookieCount,
+    source: _cookieSource,
+    ytCookiesSet: !!process.env.YT_COOKIES,
+    ytCookiesFileSet: !!process.env.YT_COOKIES_FILE,
+    ytCookiesFileExists:
+      process.env.YT_COOKIES_FILE
+        ? existsSync(process.env.YT_COOKIES_FILE)
+        : false,
+  };
+}
+
+export async function testExtract(videoId: string) {
+  const start = Date.now();
+  try {
+    const info = await ytdl.getInfo(videoId, {
+      requestOptions: {
+        headers: { "User-Agent": "Mozilla/5.0" },
+      },
+      agent: cookiesAgent,
+    });
+    const elapsed = Date.now() - start;
+    return {
+      ok: true,
+      elapsed,
+      formatCount: info.formats.length,
+      sampleFormats: info.formats.slice(0, 5).map((f) => ({
+        itag: f.itag,
+        mimeType: f.mimeType,
+        bitrate: f.bitrate,
+        hasUrl: !!f.url,
+      })),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      elapsed: Date.now() - start,
+      error: (err as Error)?.message ?? String(err),
+    };
+  }
+}
 
 /* ─── Stream URL cache via Redis + in-memory ─────────── */
 const CACHE_PREFIX = "stream:";
