@@ -16,6 +16,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@distube/ytdl": "^2.0.6",
     "@hono/node-server": "^2.0.3",
     "@neondatabase/serverless": "^1.1.0",
     "dotenv": "^17.4.2",
