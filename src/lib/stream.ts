@@ -17,11 +17,13 @@ async function extractWithYoutubei(videoId: string): Promise<string | null> {
     const info = await yt.getInfo(videoId);
     const format = info.chooseFormat({ type: "audio", quality: "best" });
     if (format && format.url) return format.url;
-    const adaptive = info.adaptive_formats?.filter((f) => f.has_audio && !f.has_video) ?? [];
-    const sorted = adaptive.sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
-    for (const f of sorted) {
+    const formats = info.streaming_data?.adaptive_formats ?? [];
+    const audioFormats = formats.filter(
+      (f: any) => f.has_audio && !f.has_video,
+    );
+    audioFormats.sort((a: any, b: any) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+    for (const f of audioFormats) {
       if (f.url) return f.url;
-      if (f.decipher) continue;
     }
     return null;
   } catch {
