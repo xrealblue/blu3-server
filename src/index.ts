@@ -10,7 +10,7 @@ import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic } from "./lib/ytmusic.js";
-import { encrypt, decrypt } from "./lib/crypto.js";
+import { encrypt } from "./lib/crypto.js";
 /* OLD: import { getAudioStreamUrl, getCookieStatus, testExtract } from "./lib/stream.js"; — replaced by YT iframe */
 
 const getCorsOrigins = (): string[] => {
