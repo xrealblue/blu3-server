@@ -6,6 +6,7 @@ const execAsync = promisify(exec);
 
 /* ─── Stream URL cache via Redis + in-memory ─────────── */
 const CACHE_PREFIX = "stream:";
+const pending = new Map<string, Promise<string | null>>();
 
 async function getCached(videoId: string): Promise<string | null> {
   return unifiedGet<string>(`${CACHE_PREFIX}${videoId}`);
@@ -34,7 +35,7 @@ function parseExpire(url: string): number | null {
 async function extractWithYtdlp(videoId: string): Promise<string | null> {
   try {
     const { stdout } = await execAsync(
-      `yt-dlp -g -f "bestaudio[abr<=64][ext=m4a]/bestaudio[abr<=64]/bestaudio[ext=m4a]" --no-warnings ${videoId}`,
+      `yt-dlp -g -f "bestaudio" --no-warnings ${videoId}`,
       { encoding: "utf8", timeout: 10000, windowsHide: true },
     );
     return stdout?.trim() || null;
@@ -45,21 +46,36 @@ async function extractWithYtdlp(videoId: string): Promise<string | null> {
 
 /* ─── Public API ─────────────────────────────────────── */
 
+async function doExtract(videoId: string): Promise<string | null> {
+  const existing = pending.get(videoId);
+  if (existing) return existing;
+
+  const promise = extractWithYtdlp(videoId)
+    .then((url) => {
+      if (url) setCache(videoId, url).catch(() => {});
+      return url;
+    })
+    .finally(() => {
+      pending.delete(videoId);
+    });
+
+  pending.set(videoId, promise);
+  return promise;
+}
+
 export async function getAudioStreamUrl(
   videoId: string,
 ): Promise<string | null> {
   const cached = await getCached(videoId);
   if (cached) return cached;
 
-  const url = await extractWithYtdlp(videoId);
-  if (url) {
-    await setCache(videoId, url);
-  }
-  return url;
+  return doExtract(videoId);
 }
 
 export async function preloadStream(videoId: string): Promise<void> {
   const cached = await getCached(videoId);
   if (cached) return;
-  await getAudioStreamUrl(videoId);
+  if (pending.has(videoId)) return;
+
+  doExtract(videoId).catch(() => {});
 }
