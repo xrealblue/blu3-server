@@ -112,7 +112,18 @@ app.get("/stream/:id", async (c) => {
     if (!videoId) return c.json({ error: "Invalid id" }, 400);
     const audioUrl = await getAudioStreamUrl(videoId);
     if (!audioUrl) return c.json({ error: "Stream not available" }, 503);
-    return c.redirect(audioUrl, 302);
+    const resp = await fetch(audioUrl);
+    if (!resp.ok || !resp.body) {
+      return c.redirect(audioUrl, 302);
+    }
+    const contentType =
+      resp.headers.get("content-type") ?? "audio/webm";
+    const contentLength = resp.headers.get("content-length");
+    c.res.headers.set("Content-Type", contentType);
+    c.res.headers.set("Cache-Control", "no-cache");
+    c.res.headers.set("Accept-Ranges", "bytes");
+    if (contentLength) c.res.headers.set("Content-Length", contentLength);
+    return c.newResponse(resp.body as any, 200);
   } catch {
     return c.json({ error: "Stream failed" }, 500);
   }

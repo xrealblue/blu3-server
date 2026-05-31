@@ -1,61 +1,40 @@
 import { Innertube } from "youtubei.js";
-import { execSync } from "node:child_process";
+import { exec } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { promisify } from "node:util";
+import { unifiedGet, unifiedSet, unifiedDel } from "./redis.js";
+
+const execAsync = promisify(exec);
 
 let innertube: Innertube | null = null;
 
-/* ─── Stream URL cache ─────────────────────────────────────────────── */
+/* ─── Stream URL cache via Redis + in-memory ─────────── */
+const CACHE_PREFIX = "stream:";
 
-interface CacheEntry {
-  url: string;
-  expiresAt: number;
+async function getCached(videoId: string): Promise<string | null> {
+  return unifiedGet<string>(`${CACHE_PREFIX}${videoId}`);
 }
 
-const streamCache = new Map<string, CacheEntry>();
-const CACHE_PURGE_INTERVAL = 10 * 60 * 1000; // 10 min
+async function setCache(videoId: string, url: string): Promise<void> {
+  const parsed = parseExpire(url);
+  const ttlSeconds = parsed
+    ? Math.max(Math.floor((parsed - Date.now()) / 1000) - 300, 60)
+    : 14400;
+  await unifiedSet(`${CACHE_PREFIX}${videoId}`, url, ttlSeconds);
+}
+
+export async function invalidateCache(videoId: string): Promise<void> {
+  await unifiedDel(`${CACHE_PREFIX}${videoId}`);
+}
 
 function parseExpire(url: string): number | null {
   const match = url.match(/[?&]expire=(\d+)/);
   if (!match) return null;
-  return Number(match[1]) * 1000; // seconds → ms
+  return Number(match[1]) * 1000;
 }
 
-function getCached(videoId: string): string | null {
-  const entry = streamCache.get(videoId);
-  if (!entry) return null;
-  // keep 5-min safety margin before YouTube's expiry
-  if (Date.now() >= entry.expiresAt - 300_000) {
-    streamCache.delete(videoId);
-    return null;
-  }
-  return entry.url;
-}
-
-function setCache(videoId: string, url: string): void {
-  const parsed = parseExpire(url);
-  const expiresAt = parsed ?? Date.now() + 4 * 60 * 60 * 1000; // 4h default
-  streamCache.set(videoId, { url, expiresAt });
-}
-
-// periodic eviction of stale entries
-let purgeTimer: ReturnType<typeof setInterval> | null = null;
-function ensurePurgeTimer(): void {
-  if (purgeTimer) return;
-  purgeTimer = setInterval(() => {
-    const now = Date.now();
-    for (const [id, entry] of streamCache) {
-      if (now >= entry.expiresAt - 300_000) streamCache.delete(id);
-    }
-    if (streamCache.size === 0 && purgeTimer) {
-      clearInterval(purgeTimer);
-      purgeTimer = null;
-    }
-  }, CACHE_PURGE_INTERVAL);
-  purgeTimer.unref?.();
-}
-
-/* ─── Cookie helpers ───────────────────────────────────────────────── */
+/* ─── Cookie helpers ─────────────────────────────────── */
 
 function getCookieHeader(): string {
   if (process.env.YT_COOKIES) return process.env.YT_COOKIES;
@@ -73,22 +52,30 @@ function getCookieHeader(): string {
   }
 }
 
-/* ─── Extractors ───────────────────────────────────────────────────── */
+/* ─── Extractors ─────────────────────────────────────── */
 
-async function getInnertube(): Promise<Innertube> {
+async function getInnertube(timeoutMs = 15_000): Promise<Innertube | null> {
   if (innertube) return innertube;
-  innertube = await Innertube.create({
-    cookie: getCookieHeader(),
-  });
+  try {
+    innertube = await Promise.race([
+      Innertube.create({ cookie: getCookieHeader() }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Innertube create timeout")), timeoutMs),
+      ),
+    ]);
+  } catch {
+    return null;
+  }
   return innertube;
 }
 
 async function extractWithYoutubei(videoId: string): Promise<string | null> {
   try {
     const yt = await getInnertube();
+    if (!yt) return null;
     const info = await yt.getInfo(videoId);
     const format = info.chooseFormat({ type: "audio", quality: "best" });
-    if (format && format.url) return format.url;
+    if (format?.url) return format.url;
     const formats = info.streaming_data?.adaptive_formats ?? [];
     const audioFormats = formats.filter(
       (f: any) => f.has_audio && !f.has_video,
@@ -103,44 +90,43 @@ async function extractWithYoutubei(videoId: string): Promise<string | null> {
   }
 }
 
-function extractWithYtdlp(videoId: string): string | null {
+async function extractWithYtdlp(videoId: string): Promise<string | null> {
   try {
-    const url = execSync(
-      `yt-dlp -g -f "bestaudio[ext=m4a]/bestaudio" --no-warnings ${videoId}`,
-      { encoding: "utf8", timeout: 20000, windowsHide: true },
-    ).trim();
-    return url || null;
+    const { stdout } = await execAsync(
+      `yt-dlp -g -f "bestaudio[abr<=64][ext=m4a]/bestaudio[abr<=64]/bestaudio[ext=m4a]" --no-warnings ${videoId}`,
+      { encoding: "utf8", timeout: 15000, windowsHide: true },
+    );
+    return stdout?.trim() || null;
   } catch {
     return null;
   }
 }
 
-/* ─── Public API ───────────────────────────────────────────────────── */
+/* ─── Public API ─────────────────────────────────────── */
 
 export async function getAudioStreamUrl(
   videoId: string,
 ): Promise<string | null> {
-  // 1. check cache
-  const cached = getCached(videoId);
+  const cached = await getCached(videoId);
   if (cached) return cached;
 
-  // 2. extract
-  const fromDlp = extractWithYtdlp(videoId);
-  if (fromDlp) {
-    setCache(videoId, fromDlp);
-    ensurePurgeTimer();
-    return fromDlp;
-  }
   const fromYt = await extractWithYoutubei(videoId);
   if (fromYt) {
-    setCache(videoId, fromYt);
-    ensurePurgeTimer();
+    await setCache(videoId, fromYt);
+    return fromYt;
   }
-  return fromYt;
+
+  const fromDlp = await extractWithYtdlp(videoId);
+  if (fromDlp) {
+    await setCache(videoId, fromDlp);
+    return fromDlp;
+  }
+
+  return null;
 }
 
-/** Pre-extract a stream URL and warm the cache (call from ws handler) */
 export async function preloadStream(videoId: string): Promise<void> {
-  if (getCached(videoId)) return; // already cached
+  const cached = await getCached(videoId);
+  if (cached) return;
   await getAudioStreamUrl(videoId);
 }

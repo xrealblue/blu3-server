@@ -31,12 +31,12 @@ import { eq, asc } from "drizzle-orm";
 import { pushTrackHistory } from "../db/trackHistory.js";
 import { preloadStream } from "../lib/stream.js";
 
-const DEFAULT_PLAY_SCHEDULE_LEAD_MS = 400;
-const MIN_PLAY_SCHEDULE_LEAD_MS = 250;
-const MAX_PLAY_SCHEDULE_LEAD_MS = 800;
-const DEFAULT_CONTROL_SCHEDULE_LEAD_MS = 180;
-const MIN_CONTROL_SCHEDULE_LEAD_MS = 120;
-const MAX_CONTROL_SCHEDULE_LEAD_MS = 350;
+const DEFAULT_PLAY_SCHEDULE_LEAD_MS = 250;
+const MIN_PLAY_SCHEDULE_LEAD_MS = 150;
+const MAX_PLAY_SCHEDULE_LEAD_MS = 500;
+const DEFAULT_CONTROL_SCHEDULE_LEAD_MS = 120;
+const MIN_CONTROL_SCHEDULE_LEAD_MS = 80;
+const MAX_CONTROL_SCHEDULE_LEAD_MS = 250;
 
 export type WSMessage =
   | { type: "clock_sync"; serverTime: number }
@@ -360,6 +360,12 @@ export async function handleWS(ws: any, url: URL) {
           });
 
           if (msg.videoId) preloadStream(msg.videoId).catch(() => {});
+          const upcoming = getQueue(roomCode).slice(0, 2);
+          for (const t of upcoming) {
+            if (t.videoId && t.videoId !== msg.videoId) {
+              preloadStream(t.videoId).catch(() => {});
+            }
+          }
           break;
         }
         case "playback:pause": {
@@ -443,6 +449,12 @@ export async function handleWS(ws: any, url: URL) {
 
           if (nextTrack) {
             if (nextTrack.videoId) preloadStream(nextTrack.videoId).catch(() => {});
+            const upcoming = queue.slice(0, 3);
+            for (const t of upcoming) {
+              if (t.videoId && t.videoId !== nextTrack.videoId) {
+                preloadStream(t.videoId).catch(() => {});
+              }
+            }
 
             const leadMs = DEFAULT_PLAY_SCHEDULE_LEAD_MS;
             const targetTime = Date.now() + leadMs;
