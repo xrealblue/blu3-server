@@ -430,7 +430,10 @@ export async function handleWS(ws: any, url: URL) {
             playedAt: Date.now(),
           });
 
-          moveQueueTrackToEnd(roomCode, currentPlayback.videoId || "");
+          const endedTrack = getQueue(roomCode).find(
+            (t) => t.videoId === currentPlayback.videoId || t.id === currentPlayback.videoId,
+          );
+          if (endedTrack) moveQueueTrackToEnd(roomCode, endedTrack.id);
 
           const queue = getQueue(roomCode);
           const nextTrack = queue.length > 0 ? queue[0] : null;
