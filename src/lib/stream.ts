@@ -11,44 +11,45 @@ let _innertube: Innertube | null = null;
 let _cookieSource: string | null = null;
 let _cookieLogin = false;
 
+function parseNetscape(raw: string): string | undefined {
+  if (raw.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((c: any) => `${c.name}=${c.value}`).join("; ");
+      }
+    } catch {}
+  }
+  if (!raw.startsWith("#") && raw.includes("=")) {
+    return raw;
+  }
+  const lines = raw.split("\n").filter((l) => !l.startsWith("#") && l.trim());
+  const cookies: string[] = [];
+  for (const line of lines) {
+    const parts = line.split("\t");
+    if (parts.length >= 7) {
+      cookies.push(`${parts[5]}=${parts[6]}`);
+    }
+  }
+  if (cookies.length > 0) return cookies.join("; ");
+  return undefined;
+}
+
 function loadCookieString(): string | undefined {
   const raw = process.env.YT_COOKIES;
   if (raw) {
     _cookieSource = "YT_COOKIES env var";
-    if (raw.startsWith("[")) {
-      try {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          return parsed.map((c: any) => `${c.name}=${c.value}`).join("; ");
-        }
-      } catch {}
-    }
+    const parsed = parseNetscape(raw);
+    if (parsed) return parsed;
     return raw;
   }
   const file = process.env.YT_COOKIES_FILE;
   if (file && existsSync(file)) {
     const content = readFileSync(file, "utf-8").trim();
     _cookieSource = `YT_COOKIES_FILE (${file})`;
-    if (content.startsWith("[")) {
-      try {
-        const parsed = JSON.parse(content);
-        if (Array.isArray(parsed)) {
-          return parsed.map((c: any) => `${c.name}=${c.value}`).join("; ");
-        }
-      } catch {}
-    }
-    if (!content.startsWith("#") && content.includes("=")) {
-      return content;
-    }
-    const lines = content.split("\n").filter((l) => !l.startsWith("#") && l.trim());
-    const cookies: string[] = [];
-    for (const line of lines) {
-      const parts = line.split("\t");
-      if (parts.length >= 7) {
-        cookies.push(`${parts[5]}=${parts[6]}`);
-      }
-    }
-    if (cookies.length > 0) return cookies.join("; ");
+    const parsed = parseNetscape(content);
+    if (parsed) return parsed;
+    return content;
   }
   return undefined;
 }
@@ -62,6 +63,9 @@ async function getInnertube(): Promise<Innertube> {
   if (cookie) {
     config.cookie = cookie;
     _cookieLogin = true;
+  }
+  if (process.env.YT_VISITOR_DATA) {
+    config.visitor_data = process.env.YT_VISITOR_DATA;
   }
 
   _innertube = await Innertube.create(config);

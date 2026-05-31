@@ -110,15 +110,15 @@ app.get("/stream/:id", async (c) => {
   const videoId = c.req.param("id");
   if (!videoId) return c.json({ error: "Missing video id" }, 400);
 
-  let url: string | null = null;
+  let streamUrl: string | null = null;
   try {
-    url = await getAudioStreamUrl(videoId);
+    streamUrl = await getAudioStreamUrl(videoId);
   } catch (err) {
     console.error("Stream error:", err);
     return c.json({ error: "Failed to get stream" }, 500);
   }
 
-  if (!url) {
+  if (!streamUrl) {
     return c.json({ error: "Stream not found" }, 404);
   }
 
@@ -127,7 +127,40 @@ app.get("/stream/:id", async (c) => {
     invalidateCache(videoId).catch(() => {});
   }
 
-  return c.redirect(url, 302);
+  try {
+    const range = c.req.header("range");
+    const upstreamHeaders: Record<string, string> = {};
+    if (range) upstreamHeaders["Range"] = range;
+
+    let upstream = await fetch(streamUrl, {
+      headers: upstreamHeaders,
+      redirect: "follow",
+    });
+
+    if (!upstream.ok && upstream.status !== 206) {
+      invalidateCache(videoId).catch(() => {});
+      streamUrl = await getAudioStreamUrl(videoId);
+      if (streamUrl) {
+        upstream = await fetch(streamUrl, { headers: upstreamHeaders, redirect: "follow" });
+      }
+    }
+
+    if (!upstream.ok && upstream.status !== 206) {
+      return c.json({ error: "Stream unavailable" }, 502);
+    }
+
+    const proxyHeaders = new Headers(upstream.headers);
+    proxyHeaders.set("Access-Control-Allow-Origin", "*");
+    proxyHeaders.set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type");
+
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: proxyHeaders,
+    });
+  } catch (err) {
+    console.error("Stream proxy error:", err);
+    return c.json({ error: "Stream proxy failed" }, 502);
+  }
 });
 
 

@@ -27,7 +27,7 @@ import {
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
 import { rooms, roomQueue } from "../db/schema.js";
-import { eq, asc } from "drizzle-orm";
+import { eq, asc, sql } from "drizzle-orm";
 import { pushTrackHistory } from "../db/trackHistory.js";
 import { preloadStream } from "../lib/stream.js";
 
@@ -104,18 +104,27 @@ async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
 
       if (queue.length > 0) {
         const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
-        await db.insert(roomQueue).values(
-          queue.map((track, index) => ({
-            id: isUuid(track.id) ? track.id : undefined,
-            roomId,
-            videoId: track.videoId,
-            trackName: track.name,
-            artistName: track.artists?.[0]?.name ?? "Unknown",
-            image: track.image ?? "",
-            durationMs: track.duration_ms ?? 0,
-            position: index,
-          }))
-        );
+        const values = queue.map((track, index) => ({
+          id: isUuid(track.id) ? track.id : crypto.randomUUID(),
+          roomId,
+          videoId: track.videoId,
+          trackName: track.name,
+          artistName: track.artists?.[0]?.name ?? "Unknown",
+          image: track.image ?? "",
+          durationMs: track.duration_ms ?? 0,
+          position: index,
+        }));
+        await db.insert(roomQueue).values(values).onConflictDoUpdate({
+          target: roomQueue.id,
+          set: {
+            videoId: sql`excluded.video_id`,
+            trackName: sql`excluded.track_name`,
+            artistName: sql`excluded.artist_name`,
+            image: sql`excluded.image`,
+            durationMs: sql`excluded.duration_ms`,
+            position: sql`excluded.position`,
+          },
+        });
       }
     } catch (err) {
       console.error("Failed to sync queue to database:", err);
