@@ -72,9 +72,10 @@ Platform.shim.eval = async (data, env) => {
     encodeURIComponent, decodeURIComponent, escape, unescape,
     URL, URLSearchParams,
     console, setTimeout, clearTimeout, setInterval, clearInterval, Buffer,
-    Symbol, Reflect, Proxy, Date,
+    Symbol, Reflect, Proxy, Date, Atomics, SharedArrayBuffer, Intl,
   });
-  return vm.runInContext(data.output, context);
+  const wrapped = `(function(){\n${data.output}\n})()`;
+  return vm.runInContext(wrapped, context);
 };
 
 async function getInnertube(): Promise<Innertube> {
