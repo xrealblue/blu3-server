@@ -29,6 +29,7 @@ import { db } from "../db/index.js";
 import { rooms, roomQueue } from "../db/schema.js";
 import { eq, asc } from "drizzle-orm";
 import { pushTrackHistory } from "../db/trackHistory.js";
+import { preloadStream } from "../lib/stream.js";
 
 const DEFAULT_PLAY_SCHEDULE_LEAD_MS = 400;
 const MIN_PLAY_SCHEDULE_LEAD_MS = 250;
@@ -357,6 +358,8 @@ export async function handleWS(ws: any, url: URL) {
             duration_ms: msg.duration_ms ?? 0,
             recentTracks: getRecentTracks(roomCode),
           });
+
+          if (msg.videoId) preloadStream(msg.videoId).catch(() => {});
           break;
         }
         case "playback:pause": {
@@ -439,6 +442,8 @@ export async function handleWS(ws: any, url: URL) {
           const nextTrack = queue.length > 0 ? queue[0] : null;
 
           if (nextTrack) {
+            if (nextTrack.videoId) preloadStream(nextTrack.videoId).catch(() => {});
+
             const leadMs = DEFAULT_PLAY_SCHEDULE_LEAD_MS;
             const targetTime = Date.now() + leadMs;
             const seekTo = 0;
@@ -515,6 +520,7 @@ export async function handleWS(ws: any, url: URL) {
         }
         case "queue:add": {
           addToQueue(roomCode, msg.track);
+          if (msg.track?.videoId) preloadStream(msg.track.videoId).catch(() => {});
           broadcast(roomCode, {
             type: "room:queue_update",
             queue: getQueue(roomCode),
