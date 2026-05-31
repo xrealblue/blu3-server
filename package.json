@@ -16,13 +16,13 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@distube/ytdl": "^2.0.6",
     "@hono/node-server": "^2.0.3",
     "@neondatabase/serverless": "^1.1.0",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.21",
     "nanoid": "^5.1.11",
+    "play-dl": "^1.9.7",
     "ws": "^8.21.0",
     "ytmusic-api": "^5.3.1"
   },
