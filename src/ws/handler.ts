@@ -29,7 +29,7 @@ import { db } from "../db/index.js";
 import { rooms, roomQueue } from "../db/schema.js";
 import { eq, asc } from "drizzle-orm";
 import { pushTrackHistory } from "../db/trackHistory.js";
-import { preloadStream } from "../lib/stream.js";
+/* OLD: import { preloadStream } from "../lib/stream.js"; — replaced by YT iframe */
 
 const DEFAULT_PLAY_SCHEDULE_LEAD_MS = 250;
 const MIN_PLAY_SCHEDULE_LEAD_MS = 150;
@@ -369,13 +369,7 @@ export async function handleWS(ws: any, url: URL) {
             recentTracks: getRecentTracks(roomCode),
           });
 
-          if (msg.videoId) preloadStream(msg.videoId).catch(() => {});
-          const upcoming = getQueue(roomCode).slice(0, 2);
-          for (const t of upcoming) {
-            if (t.videoId && t.videoId !== msg.videoId) {
-              preloadStream(t.videoId).catch(() => {});
-            }
-          }
+          /* OLD: preloadStream calls — replaced by YT iframe */
           break;
         }
         case "playback:pause": {
@@ -458,13 +452,7 @@ export async function handleWS(ws: any, url: URL) {
           const nextTrack = queue.length > 0 ? queue[0] : null;
 
           if (nextTrack) {
-            if (nextTrack.videoId) preloadStream(nextTrack.videoId).catch(() => {});
-            const upcoming = queue.slice(0, 3);
-            for (const t of upcoming) {
-              if (t.videoId && t.videoId !== nextTrack.videoId) {
-                preloadStream(t.videoId).catch(() => {});
-              }
-            }
+            /* OLD: preloadStream calls — replaced by YT iframe */
 
             const leadMs = DEFAULT_PLAY_SCHEDULE_LEAD_MS;
             const targetTime = Date.now() + leadMs;
@@ -542,7 +530,7 @@ export async function handleWS(ws: any, url: URL) {
         }
         case "queue:add": {
           addToQueue(roomCode, msg.track);
-          if (msg.track?.videoId) preloadStream(msg.track.videoId).catch(() => {});
+          /* OLD: preloadStream — replaced by YT iframe */
           broadcast(roomCode, {
             type: "room:queue_update",
             queue: getQueue(roomCode),

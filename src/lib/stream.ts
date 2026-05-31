@@ -1,3 +1,18 @@
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * OLD: YouTube stream extraction (yt-dlp + @distube/ytdl-core).
+ * Kept for later restoration. Replaced by direct YT iframe playback.
+ *
+ * To restore:
+ *   1. Uncomment everything below
+ *   2. Restore GET /stream/:id route in index.ts
+ *   3. Ensure yt-dlp binary is available (scripts/download-ytdlp.mjs)
+ *   4. Restore preloadStream() calls in ws/handler.ts if needed
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+/*
+
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import ytdl from "@distube/ytdl-core";
@@ -8,7 +23,6 @@ import { fileURLToPath } from "node:url";
 
 const execAsync = promisify(exec);
 
-/* ─── Find yt-dlp binary ──────────────────────────────── */
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..", "..");
 const BIN_DIR = join(ROOT, ".bin");
@@ -17,7 +31,6 @@ const YT_DLP_BIN = existsSync(join(BIN_DIR, BIN_NAME))
   ? join(BIN_DIR, BIN_NAME)
   : "yt-dlp";
 
-/* ─── Cookies (shared by both extractors) ─────────────── */
 let _cookieCount = 0;
 let _cookieSource: string | null = null;
 let _cookiesJson: any = null;
@@ -48,7 +61,6 @@ function loadCookies() {
 
 loadCookies();
 
-/* ─── Method 1: yt-dlp (command line, most reliable) ─── */
 async function extractWithYtdlp(videoId: string): Promise<string | null> {
   try {
     const cookiesArg =
@@ -65,7 +77,6 @@ async function extractWithYtdlp(videoId: string): Promise<string | null> {
   }
 }
 
-/* ─── Method 2: @distube/ytdl-core (pure JS fallback) ─── */
 async function extractWithYtdlCore(videoId: string): Promise<string | null> {
   try {
     const info = await ytdl.getInfo(videoId, {
@@ -94,7 +105,6 @@ async function extractWithYtdlCore(videoId: string): Promise<string | null> {
   }
 }
 
-/* ─── Stream URL cache via Redis + in-memory ─────────── */
 const CACHE_PREFIX = "stream:";
 const pending = new Map<string, Promise<string | null>>();
 
@@ -120,7 +130,6 @@ function parseExpire(url: string): number | null {
   return Number(match[1]) * 1000;
 }
 
-/* ─── Combined extraction ─────────────────────────────── */
 async function doExtract(videoId: string): Promise<string | null> {
   const existing = pending.get(videoId);
   if (existing) return existing;
@@ -140,8 +149,6 @@ async function doExtract(videoId: string): Promise<string | null> {
   return promise;
 }
 
-/* ─── Public API ─────────────────────────────────────── */
-
 export async function getAudioStreamUrl(
   videoId: string,
 ): Promise<string | null> {
@@ -156,8 +163,6 @@ export async function preloadStream(videoId: string): Promise<void> {
   if (pending.has(videoId)) return;
   doExtract(videoId).catch(() => {});
 }
-
-/* ─── Debug helpers ───────────────────────────────────── */
 
 export function getCookieStatus() {
   return {
@@ -196,3 +201,5 @@ export async function testExtract(videoId: string) {
     },
   };
 }
+
+*/

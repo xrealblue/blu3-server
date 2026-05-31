@@ -11,7 +11,7 @@ import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic } from "./lib/ytmusic.js";
 import { encrypt, decrypt } from "./lib/crypto.js";
-import { getAudioStreamUrl, getCookieStatus, testExtract } from "./lib/stream.js";
+/* OLD: import { getAudioStreamUrl, getCookieStatus, testExtract } from "./lib/stream.js"; — replaced by YT iframe */
 
 const getCorsOrigins = (): string[] => {
   const originsEnv = process.env.CORS_ORIGINS;
@@ -99,52 +99,11 @@ app.get("/api/search", async (c) => {
   }
 });
 
-app.get("/debug/stream", async (c) => {
-  const videoId = c.req.query("videoId") || "dQw4w9WgXcQ";
-  const extractResult = await testExtract(videoId);
-  return c.json({
-    cookies: getCookieStatus(),
-    extract: extractResult,
-  });
-});
+/* OLD: stream extraction endpoints — replaced by YT iframe
+app.get("/debug/stream", async (c) => { ... });
+app.get("/stream/:id", async (c) => { ... });
+*/
 
-app.get("/stream/:id", async (c) => {
-  const { id } = c.req.param();
-  if (!id) return c.json({ error: "Missing id" }, 400);
-  try {
-    let videoId: string;
-    try {
-      videoId = decrypt(id);
-    } catch {
-      videoId = id;
-    }
-    if (!videoId) return c.json({ error: "Invalid id" }, 400);
-    const audioUrl = await getAudioStreamUrl(videoId);
-    if (!audioUrl) return c.json({ error: "Stream not available" }, 503);
-    let resp: Response;
-    try {
-      resp = await fetch(audioUrl, {
-        headers: { "User-Agent": "Mozilla/5.0" },
-      });
-    } catch {
-      return c.redirect(audioUrl, 302);
-    }
-    if (!resp.ok || !resp.body) {
-      return c.redirect(audioUrl, 302);
-    }
-    const contentType =
-      resp.headers.get("content-type") ?? "audio/webm";
-    const contentLength = resp.headers.get("content-length");
-    c.header("Content-Type", contentType);
-    c.header("Cache-Control", "no-cache");
-    c.header("Accept-Ranges", "bytes");
-    if (contentLength) c.header("Content-Length", contentLength);
-    return c.newResponse(resp.body as any, 200);
-  } catch (err) {
-    console.error("Stream error:", err);
-    return c.json({ error: "Stream failed" }, 500);
-  }
-});
 
 app.get("/api/suggest", async (c) => {
   const q = c.req.query("q");
