@@ -10,6 +10,8 @@ import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic } from "./lib/ytmusic.js";
+import { decrypt } from "./lib/crypto.js";
+import { getAudioStreamUrl } from "./lib/stream.js";
 
 const getCorsOrigins = (): string[] => {
   const originsEnv = process.env.CORS_ORIGINS;
