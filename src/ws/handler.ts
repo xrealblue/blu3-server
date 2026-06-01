@@ -230,6 +230,8 @@ export async function handleWS(ws: any, url: URL) {
         return;
       }
 
+      console.log(`[WS] ${payload.name}: ${msg.type}`, JSON.stringify(msg).slice(0, 200));
+
       switch (msg.type) {
         case "chat:send": {
           const chatMsg: ChatMessage = {
