@@ -32,7 +32,7 @@ import { pushTrackHistory } from "../db/trackHistory.js";
 
 export type WSMessage =
   | { type: "clock_sync"; serverTime: number }
-  | { type: "play"; videoId: string; seekTo: number; serverTime: number }
+  | { type: "play"; videoId: string; seekTo: number; serverTime: number; id?: string; trackName?: string; artistName?: string; image?: string; duration_ms?: number; recentTracks?: any[] }
   | { type: "pause"; serverTime: number }
   | { type: "seek"; seekTo: number; serverTime: number };
 
