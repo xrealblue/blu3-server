@@ -29,7 +29,6 @@ import { db } from "../db/index.js";
 import { rooms, roomQueue } from "../db/schema.js";
 import { eq, asc, sql } from "drizzle-orm";
 import { pushTrackHistory } from "../db/trackHistory.js";
-import { preloadStream } from "../lib/stream.js";
 
 const DEFAULT_PLAY_SCHEDULE_LEAD_MS = 250;
 const MIN_PLAY_SCHEDULE_LEAD_MS = 150;

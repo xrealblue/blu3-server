@@ -5,44 +5,13 @@ import { logger } from "hono/logger";
 import * as dotenv from "dotenv";
 dotenv.config();
 import { WebSocketServer } from "ws";
-import https from "node:https";
-import { Readable } from "node:stream";
 import authRoute from "./routes/auth.js";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic } from "./lib/ytmusic.js";
 import { encrypt } from "./lib/crypto.js";
-import { getAudioStreamUrl, getCookieStatus, testExtract, invalidateCache } from "./lib/stream.js";
-
-const _ipv4Agent = new https.Agent({ family: 4, keepAlive: true });
-
-async function ipv4Fetch(url: string, init?: { headers?: Record<string, string> }): Promise<Response> {
-  const maxRedirects = 5;
-  const { headers } = init || {};
-  const followRedirect = async (target: string, depth: number): Promise<Response> => {
-    if (depth > maxRedirects) throw new Error("Too many redirects");
-    return new Promise((resolve, reject) => {
-      const req = https.get(target, { agent: _ipv4Agent, headers }, (res) => {
-        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          const redirectUrl = new URL(res.headers.location, target).toString();
-          return resolve(followRedirect(redirectUrl, depth + 1));
-        }
-        const responseHeaders = new Headers();
-        for (const [k, v] of Object.entries(res.headers)) {
-          if (v) responseHeaders.set(k, Array.isArray(v) ? v.join(", ") : v);
-        }
-        const webStream = Readable.toWeb(res) as ReadableStream<Uint8Array>;
-        resolve(new Response(webStream, {
-          status: res.statusCode,
-          headers: responseHeaders,
-        }));
-      });
-      req.on("error", reject);
-    });
-  };
-  return followRedirect(url, 0);
-}
+import { getCookieStatus } from "./lib/stream.js";
 
 const getCorsOrigins = (): string[] => {
   const defaultOrigins = ["http://localhost:3000", "https://blu3.in"];
@@ -132,67 +101,12 @@ app.get("/api/search", async (c) => {
   }
 });
 
-app.get("/debug/stream", async (c) => {
-  const videoId = c.req.query("v");
-  if (!videoId) return c.json({ error: "?v=VIDEO_ID required" }, 400);
-  const result = await testExtract(videoId);
-  return c.json(result);
-});
-
-app.get("/stream/:id", async (c) => {
-  const videoId = c.req.param("id");
-  if (!videoId) return c.json({ error: "Missing video id" }, 400);
-
-  let streamUrl: string | null = null;
-  try {
-    streamUrl = await getAudioStreamUrl(videoId);
-  } catch (err) {
-    console.error("Stream error:", err);
-    return c.json({ error: "Failed to get stream" }, 500);
-  }
-
-  if (!streamUrl) {
-    return c.json({ error: "Stream not found" }, 404);
-  }
-
-  const invalidate = c.req.query("invalidate");
-  if (invalidate) {
-    invalidateCache(videoId).catch(() => {});
-  }
-
-  try {
-    const range = c.req.header("range");
-    const upstreamHeaders: Record<string, string> = {};
-    if (range) upstreamHeaders["Range"] = range;
-
-    let upstream = await ipv4Fetch(streamUrl, {
-      headers: upstreamHeaders,
-    });
-
-    if (!upstream.ok && upstream.status !== 206) {
-      invalidateCache(videoId).catch(() => {});
-      streamUrl = await getAudioStreamUrl(videoId);
-      if (streamUrl) {
-        upstream = await ipv4Fetch(streamUrl, { headers: upstreamHeaders });
-      }
-    }
-
-    if (!upstream.ok && upstream.status !== 206) {
-      return c.json({ error: "Stream unavailable" }, 502);
-    }
-
-    const proxyHeaders = new Headers(upstream.headers);
-    proxyHeaders.set("Access-Control-Allow-Origin", "*");
-    proxyHeaders.set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type");
-
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: proxyHeaders,
-    });
-  } catch (err) {
-    console.error("Stream proxy error:", err);
-    return c.json({ error: "Stream proxy failed" }, 502);
-  }
+app.get("/debug", async (c) => {
+  return c.json({
+    status: "ok",
+    stream: "disabled — using YT IFrame API directly (Vibe-style)",
+    cookies: getCookieStatus(),
+  });
 });
 
 
