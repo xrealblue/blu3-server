@@ -44,5 +44,5 @@ if (!distEntry) {
   process.exit(1);
 }
 
-const startStatus = run(process.execPath, [distEntry]);
+const startStatus = run(process.execPath, ["--dns-result-order=ipv4first", distEntry]);
 process.exit(startStatus);
