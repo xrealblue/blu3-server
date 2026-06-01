@@ -30,60 +30,25 @@ import { rooms, roomQueue } from "../db/schema.js";
 import { eq, asc, sql } from "drizzle-orm";
 import { pushTrackHistory } from "../db/trackHistory.js";
 
-const DEFAULT_PLAY_SCHEDULE_LEAD_MS = 250;
-const MIN_PLAY_SCHEDULE_LEAD_MS = 150;
-const MAX_PLAY_SCHEDULE_LEAD_MS = 500;
-const DEFAULT_CONTROL_SCHEDULE_LEAD_MS = 120;
-const MIN_CONTROL_SCHEDULE_LEAD_MS = 80;
-const MAX_CONTROL_SCHEDULE_LEAD_MS = 250;
-
 export type WSMessage =
   | { type: "clock_sync"; serverTime: number }
-  | { type: "ping"; clientTime: number }
-  | { type: "pong"; serverTime: number; rtt: number }
-  | { type: "schedule_play"; videoId: string; seekTo: number; targetTime: number }
-  | { type: "schedule_pause"; targetTime: number }
-  | { type: "schedule_seek"; seekTo: number; targetTime: number }
-  | {
-      type: "playback_state";
-      state: "playing" | "paused" | "buffering";
-      currentTime: number;
-    };
+  | { type: "play"; videoId: string; seekTo: number; serverTime: number }
+  | { type: "pause"; serverTime: number }
+  | { type: "seek"; seekTo: number; serverTime: number };
 
 type IncomingMessage =
-  | WSMessage
-  | { type: "chat:send"; text: string }
-  | {
-      type: "playback:play";
-      id?: string;
-      videoId: string;
-      trackName?: string;
-      artistName?: string;
-      image?: string;
-      currentTime?: number;
-      duration_ms?: number;
-      leadMs?: number;
-    }
-  | { type: "playback:pause"; currentTime?: number; leadMs?: number }
-  | { type: "playback:seek"; currentTime?: number; leadMs?: number }
+  | { type: "playback:play"; id?: string; videoId: string; trackName?: string; artistName?: string; image?: string; currentTime?: number; duration_ms?: number }
+  | { type: "playback:pause"; currentTime?: number }
+  | { type: "playback:seek"; currentTime?: number }
   | { type: "playback:ended"; currentTime?: number }
   | { type: "playback:mode"; shuffle?: boolean; repeatMode?: RepeatMode }
   | { type: "playback:sync_request" }
   | { type: "progress"; currentTime: number }
+  | { type: "chat:send"; text: string }
   | { type: "queue:add"; track: QueueTrack }
   | { type: "queue:remove"; trackId: string }
   | { type: "queue:cycle_current"; trackId: string }
   | { type: "queue:clear" };
-
-function clampLeadMs(
-  value: number | undefined,
-  min: number,
-  max: number,
-  fallback: number,
-) {
-  const next = Number.isFinite(value) ? Number(value) : fallback;
-  return Math.min(Math.max(next, min), max);
-}
 
 function canControlPlayback(roomCode: string, hostId: string, userId: string) {
   const isHostActive = isHostInRoom(roomCode);
@@ -95,7 +60,7 @@ const syncLocks = new Map<string, Promise<void>>();
 
 async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
   while (syncLocks.has(roomId)) {
-    try { await syncLocks.get(roomId); } catch { /* ignore */ }
+    try { await syncLocks.get(roomId); } catch { }
   }
   const promise = (async () => {
     try {
@@ -135,15 +100,9 @@ async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
   await promise;
 }
 
-function scheduleQueueSync(roomId: string, roomCode: string, immediate = false) {
+function scheduleQueueSync(roomId: string, roomCode: string) {
   const existing = syncDebounceTimers.get(roomId);
   if (existing) clearTimeout(existing);
-
-  if (immediate) {
-    syncDebounceTimers.delete(roomId);
-    syncQueueToDb(roomId, getQueue(roomCode)).catch(console.error);
-    return;
-  }
 
   syncDebounceTimers.set(roomId, setTimeout(() => {
     syncDebounceTimers.delete(roomId);
@@ -151,26 +110,41 @@ function scheduleQueueSync(roomId: string, roomCode: string, immediate = false) 
   }, 10_000));
 }
 
+const jwtCache = new Map<string, { payload: any; expiresAt: number }>();
+
+function getCachedJwt(token: string): any | null {
+  const cached = jwtCache.get(token);
+  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+  jwtCache.delete(token);
+  return null;
+}
+
+function setCachedJwt(token: string, payload: any) {
+  const exp = (payload.exp ?? (Date.now() / 1000 + 3600)) * 1000;
+  jwtCache.set(token, { payload, expiresAt: exp - 60_000 });
+}
+
 export async function handleWS(ws: any, url: URL) {
   const token = url.searchParams.get("token");
   const roomCode = url.searchParams.get("room")?.toUpperCase();
 
   if (!token || !roomCode) {
-    ws.send(
-      JSON.stringify({ type: "error", message: "Missing token or room" }),
-    );
+    ws.send(JSON.stringify({ type: "error", message: "Missing token or room" }));
     ws.close();
     return null;
   }
 
-  let payload: any;
-  try {
-    payload = await verify(token, process.env.JWT_SECRET!, "HS256");
-  } catch (err) {
-    console.error("WS auth error:", err);
-    ws.send(JSON.stringify({ type: "error", message: "Invalid token" }));
-    ws.close();
-    return null;
+  let payload: any = getCachedJwt(token);
+  if (!payload) {
+    try {
+      payload = await verify(token, process.env.JWT_SECRET!, "HS256");
+      setCachedJwt(token, payload);
+    } catch (err) {
+      console.error("WS auth error:", err);
+      ws.send(JSON.stringify({ type: "error", message: "Invalid token" }));
+      ws.close();
+      return null;
+    }
   }
 
   const socketId = nanoid();
@@ -220,25 +194,21 @@ export async function handleWS(ws: any, url: URL) {
     }
   }
 
-  ws.send(
-    JSON.stringify({
-      type: "clock_sync",
-      serverTime: Date.now(),
-    } satisfies Extract<WSMessage, { type: "clock_sync" }>),
-  );
+  ws.send(JSON.stringify({
+    type: "clock_sync",
+    serverTime: Date.now(),
+  } satisfies Extract<WSMessage, { type: "clock_sync" }>));
 
-  ws.send(
-    JSON.stringify({
-      type: "room:joined",
-      roomCode,
-      isHost: room.hostId === payload.sub,
-      members: getRoomMembers(roomCode),
-      playback: getPlayback(roomCode),
-      playbackMode: getPlaybackMode(roomCode),
-      recentTracks: getRecentTracks(roomCode),
-      queue: getQueue(roomCode),
-    }),
-  );
+  ws.send(JSON.stringify({
+    type: "room:joined",
+    roomCode,
+    isHost: room.hostId === payload.sub,
+    members: getRoomMembers(roomCode),
+    playback: getPlayback(roomCode),
+    playbackMode: getPlaybackMode(roomCode),
+    recentTracks: getRecentTracks(roomCode),
+    queue: getQueue(roomCode),
+  }));
 
   broadcast(
     roomCode,
@@ -250,7 +220,6 @@ export async function handleWS(ws: any, url: URL) {
     socketId,
   );
 
-  // ← return handlers, no addEventListener
   return {
     async onMessage(event: any) {
       let msg: IncomingMessage;
@@ -262,14 +231,6 @@ export async function handleWS(ws: any, url: URL) {
       }
 
       switch (msg.type) {
-        case "ping": {
-          sendTo(socketId, roomCode, {
-            type: "pong",
-            serverTime: Date.now(),
-            rtt: 0,
-          } satisfies Extract<WSMessage, { type: "pong" }>);
-          break;
-        }
         case "chat:send": {
           const chatMsg: ChatMessage = {
             id: nanoid(),
@@ -282,33 +243,14 @@ export async function handleWS(ws: any, url: URL) {
           broadcast(roomCode, { type: "chat:message", message: chatMsg });
           break;
         }
-        case "playback_state": {
-          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
-          setPlayback(roomCode, {
-            isPlaying: msg.state === "playing",
-            currentTime: Number(msg.currentTime ?? 0),
-          });
-          break;
-        }
         case "playback:play": {
           if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
 
-          const leadMs = clampLeadMs(
-            msg.leadMs,
-            MIN_PLAY_SCHEDULE_LEAD_MS,
-            MAX_PLAY_SCHEDULE_LEAD_MS,
-            DEFAULT_PLAY_SCHEDULE_LEAD_MS,
-          );
-          const targetTime = Date.now() + leadMs;
           const seekTo = Math.max(0, Number(msg.currentTime ?? 0));
+          const serverTime = Date.now();
 
           const currentPlayback = getPlayback(roomCode);
-          if (
-            currentPlayback?.videoId &&
-            currentPlayback.videoId !== msg.videoId
-          ) {
-            // Only push to history if track was manually skipped (still playing).
-            // If already ended, playback:ended already handled it.
+          if (currentPlayback?.videoId && currentPlayback.videoId !== msg.videoId) {
             if (currentPlayback.isPlaying) {
               pushTrackHistory(dbRoom.id, {
                 videoId: currentPlayback.videoId,
@@ -326,13 +268,10 @@ export async function handleWS(ws: any, url: URL) {
               });
             }
 
-            // Move old song to bottom of queue via shared helper
             const oldTrack = getQueue(roomCode).find(
               (t) => t.videoId === currentPlayback.videoId || t.id === currentPlayback.videoId,
             );
-            if (oldTrack) {
-              moveQueueTrackToEnd(roomCode, oldTrack.id);
-            }
+            if (oldTrack) moveQueueTrackToEnd(roomCode, oldTrack.id);
           }
 
           setPlayback(roomCode, {
@@ -342,33 +281,29 @@ export async function handleWS(ws: any, url: URL) {
             image: msg.image ?? "",
             isPlaying: true,
             currentTime: seekTo,
-            updatedAt: targetTime,
+            updatedAt: serverTime,
           });
 
           if (msg.videoId) {
-            const queueTrack = {
+            insertQueueTop(roomCode, {
               id: msg.id || `room-${msg.videoId}`,
               videoId: msg.videoId,
               name: msg.trackName ?? "",
               artists: [{ name: msg.artistName ?? "" }],
               image: msg.image ?? "",
               duration_ms: msg.duration_ms ?? 0,
-            };
-            insertQueueTop(roomCode, queueTrack);
+            });
           }
 
-          scheduleQueueSync(dbRoom.id, roomCode, true);
+          scheduleQueueSync(dbRoom.id, roomCode);
+
+          broadcast(roomCode, { type: "room:queue_update", queue: getQueue(roomCode) });
 
           broadcast(roomCode, {
-            type: "room:queue_update",
-            queue: getQueue(roomCode),
-          });
-
-          broadcast(roomCode, {
-            type: "schedule_play",
+            type: "play",
             videoId: msg.videoId,
             seekTo,
-            targetTime,
+            serverTime,
             id: msg.id || `room-${msg.videoId}`,
             trackName: msg.trackName ?? "",
             artistName: msg.artistName ?? "",
@@ -382,52 +317,26 @@ export async function handleWS(ws: any, url: URL) {
         case "playback:pause": {
           if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
 
-          const leadMs = clampLeadMs(
-            msg.leadMs,
-            MIN_CONTROL_SCHEDULE_LEAD_MS,
-            MAX_CONTROL_SCHEDULE_LEAD_MS,
-            DEFAULT_CONTROL_SCHEDULE_LEAD_MS,
-          );
-          const targetTime = Date.now() + leadMs;
-          const currentPlayback = getPlayback(roomCode);
-          const pauseAt =
-            Math.max(0, Number(msg.currentTime ?? currentPlayback?.currentTime ?? 0)) +
-            ((currentPlayback?.isPlaying ?? true)
-              ? leadMs / 1000
-              : 0);
-
           setPlayback(roomCode, {
             isPlaying: false,
-            currentTime: pauseAt,
-            updatedAt: targetTime,
+            currentTime: Math.max(0, Number(msg.currentTime ?? 0)),
+            updatedAt: Date.now(),
           });
-          broadcast(roomCode, {
-            type: "schedule_pause",
-            targetTime,
-          });
+
+          broadcast(roomCode, { type: "pause", serverTime: Date.now() });
           break;
         }
         case "playback:seek": {
           if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
 
-          const leadMs = clampLeadMs(
-            msg.leadMs,
-            MIN_CONTROL_SCHEDULE_LEAD_MS,
-            MAX_CONTROL_SCHEDULE_LEAD_MS,
-            DEFAULT_CONTROL_SCHEDULE_LEAD_MS,
-          );
-          const targetTime = Date.now() + leadMs;
           const seekTo = Math.max(0, Number(msg.currentTime ?? 0));
 
           setPlayback(roomCode, {
             currentTime: seekTo,
-            updatedAt: targetTime,
+            updatedAt: Date.now(),
           });
-          broadcast(roomCode, {
-            type: "schedule_seek",
-            seekTo,
-            targetTime,
-          });
+
+          broadcast(roomCode, { type: "seek", seekTo, serverTime: Date.now() });
           break;
         }
         case "playback:ended": {
@@ -459,25 +368,21 @@ export async function handleWS(ws: any, url: URL) {
           const nextTrack = queue.length > 0 ? queue[0] : null;
 
           if (nextTrack) {
-            const leadMs = DEFAULT_PLAY_SCHEDULE_LEAD_MS;
-            const targetTime = Date.now() + leadMs;
-            const seekTo = 0;
-
             setPlayback(roomCode, {
               videoId: nextTrack.videoId,
               trackName: nextTrack.name,
               artistName: nextTrack.artists?.[0]?.name ?? "",
               image: nextTrack.image ?? "",
               isPlaying: true,
-              currentTime: seekTo,
-              updatedAt: targetTime,
+              currentTime: 0,
+              updatedAt: Date.now(),
             });
 
             broadcast(roomCode, {
-              type: "schedule_play",
+              type: "play",
               videoId: nextTrack.videoId,
-              seekTo,
-              targetTime,
+              seekTo: 0,
+              serverTime: Date.now(),
               id: nextTrack.id,
               trackName: nextTrack.name,
               artistName: nextTrack.artists?.[0]?.name ?? "",
@@ -486,15 +391,12 @@ export async function handleWS(ws: any, url: URL) {
               recentTracks: getRecentTracks(roomCode),
             });
 
-            scheduleQueueSync(dbRoom.id, roomCode, true);
+            scheduleQueueSync(dbRoom.id, roomCode);
           } else {
             setPlayback(roomCode, {
               isPlaying: false,
               videoId: null,
-              currentTime: Math.max(
-                0,
-                Number(msg.currentTime ?? currentPlayback.currentTime ?? 0),
-              ),
+              currentTime: Math.max(0, Number(msg.currentTime ?? currentPlayback.currentTime ?? 0)),
             });
           }
           break;
@@ -502,9 +404,7 @@ export async function handleWS(ws: any, url: URL) {
         case "playback:mode": {
           if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
           setPlaybackMode(roomCode, {
-            ...(typeof msg.shuffle === "boolean"
-              ? { shuffle: msg.shuffle }
-              : {}),
+            ...(typeof msg.shuffle === "boolean" ? { shuffle: msg.shuffle } : {}),
             ...(msg.repeatMode ? { repeatMode: msg.repeatMode } : {}),
           });
           broadcast(roomCode, {
@@ -535,38 +435,26 @@ export async function handleWS(ws: any, url: URL) {
         }
         case "queue:add": {
           addToQueue(roomCode, msg.track);
-          broadcast(roomCode, {
-            type: "room:queue_update",
-            queue: getQueue(roomCode),
-          });
+          broadcast(roomCode, { type: "room:queue_update", queue: getQueue(roomCode) });
           scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
         case "queue:remove": {
           removeFromQueue(roomCode, msg.trackId);
-          broadcast(roomCode, {
-            type: "room:queue_update",
-            queue: getQueue(roomCode),
-          });
+          broadcast(roomCode, { type: "room:queue_update", queue: getQueue(roomCode) });
           scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
         case "queue:cycle_current": {
           if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
           moveQueueTrackToEnd(roomCode, msg.trackId);
-          broadcast(roomCode, {
-            type: "room:queue_update",
-            queue: getQueue(roomCode),
-          });
+          broadcast(roomCode, { type: "room:queue_update", queue: getQueue(roomCode) });
           scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
         case "queue:clear": {
           clearQueue(roomCode);
-          broadcast(roomCode, {
-            type: "room:queue_update",
-            queue: getQueue(roomCode),
-          });
+          broadcast(roomCode, { type: "room:queue_update", queue: getQueue(roomCode) });
           scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }

@@ -13,16 +13,25 @@ type RoomsEnv = {
 
 const roomsRoute = new Hono<RoomsEnv>();
 
+const jwtCache = new Map<string, { payload: any; expiresAt: number }>();
+
 const requireAuth: MiddlewareHandler<RoomsEnv> = async (c, next) => {
   const header = c.req.header("Authorization");
   if (!header?.startsWith("Bearer "))
     return c.json({ error: "Unauthorized" }, 401);
+  const token = header.slice(7);
+
+  const cached = jwtCache.get(token);
+  if (cached && cached.expiresAt > Date.now()) {
+    c.set("userId", cached.payload.sub as string);
+    await next();
+    return;
+  }
+
   try {
-    const payload = await verify(
-      header.slice(7),
-      process.env.JWT_SECRET!,
-      "HS256",
-    );
+    const payload = await verify(token, process.env.JWT_SECRET!, "HS256");
+    const exp = (payload.exp ?? (Date.now() / 1000 + 3600)) * 1000;
+    jwtCache.set(token, { payload, expiresAt: exp - 60_000 });
     c.set("userId", payload.sub as string);
     await next();
   } catch (err) {
