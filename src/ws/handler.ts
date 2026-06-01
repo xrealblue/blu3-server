@@ -377,9 +377,6 @@ export async function handleWS(ws: any, url: URL) {
             recentTracks: getRecentTracks(roomCode),
           });
 
-          if (msg.videoId) {
-            preloadStream(msg.videoId).catch(() => {});
-          }
           break;
         }
         case "playback:pause": {
