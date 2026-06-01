@@ -1,5 +1,3 @@
-import { setDefaultResultOrder } from "node:dns";
-setDefaultResultOrder("ipv4first");
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -7,6 +5,8 @@ import { logger } from "hono/logger";
 import * as dotenv from "dotenv";
 dotenv.config();
 import { WebSocketServer } from "ws";
+import https from "node:https";
+import { Readable } from "node:stream";
 import authRoute from "./routes/auth.js";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
@@ -14,6 +14,35 @@ import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic } from "./lib/ytmusic.js";
 import { encrypt } from "./lib/crypto.js";
 import { getAudioStreamUrl, getCookieStatus, testExtract, invalidateCache } from "./lib/stream.js";
+
+const _ipv4Agent = new https.Agent({ family: 4, keepAlive: true });
+
+async function ipv4Fetch(url: string, init?: { headers?: Record<string, string> }): Promise<Response> {
+  const maxRedirects = 5;
+  const { headers } = init || {};
+  const followRedirect = async (target: string, depth: number): Promise<Response> => {
+    if (depth > maxRedirects) throw new Error("Too many redirects");
+    return new Promise((resolve, reject) => {
+      const req = https.get(target, { agent: _ipv4Agent, headers }, (res) => {
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          const redirectUrl = new URL(res.headers.location, target).toString();
+          return resolve(followRedirect(redirectUrl, depth + 1));
+        }
+        const responseHeaders = new Headers();
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (v) responseHeaders.set(k, Array.isArray(v) ? v.join(", ") : v);
+        }
+        const webStream = Readable.toWeb(res) as ReadableStream<Uint8Array>;
+        resolve(new Response(webStream, {
+          status: res.statusCode,
+          headers: responseHeaders,
+        }));
+      });
+      req.on("error", reject);
+    });
+  };
+  return followRedirect(url, 0);
+}
 
 const getCorsOrigins = (): string[] => {
   const defaultOrigins = ["http://localhost:3000", "https://blu3.in"];
@@ -136,16 +165,15 @@ app.get("/stream/:id", async (c) => {
     const upstreamHeaders: Record<string, string> = {};
     if (range) upstreamHeaders["Range"] = range;
 
-    let upstream = await fetch(streamUrl, {
+    let upstream = await ipv4Fetch(streamUrl, {
       headers: upstreamHeaders,
-      redirect: "follow",
     });
 
     if (!upstream.ok && upstream.status !== 206) {
       invalidateCache(videoId).catch(() => {});
       streamUrl = await getAudioStreamUrl(videoId);
       if (streamUrl) {
-        upstream = await fetch(streamUrl, { headers: upstreamHeaders, redirect: "follow" });
+        upstream = await ipv4Fetch(streamUrl, { headers: upstreamHeaders });
       }
     }
 
