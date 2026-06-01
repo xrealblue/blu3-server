@@ -1,3 +1,5 @@
+import { setDefaultResultOrder } from "node:dns";
+setDefaultResultOrder("ipv4first");
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -14,14 +16,16 @@ import { encrypt } from "./lib/crypto.js";
 import { getAudioStreamUrl, getCookieStatus, testExtract, invalidateCache } from "./lib/stream.js";
 
 const getCorsOrigins = (): string[] => {
+  const defaultOrigins = ["http://localhost:3000", "https://blu3.in"];
   const originsEnv = process.env.CORS_ORIGINS;
   if (!originsEnv) {
-    return [process.env.FRONTEND_URL ?? "http://localhost:3000"];
+    return defaultOrigins;
   }
-  return originsEnv
+  const parsed = originsEnv
     .split(",")
     .map((origin) => origin.trim())
     .filter(Boolean);
+  return [...new Set([...defaultOrigins, ...parsed])];
 };
 
 const app = new Hono();
