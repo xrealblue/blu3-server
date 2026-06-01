@@ -464,18 +464,22 @@ export async function handleWS(ws: any, url: URL) {
     },
 
     onClose() {
-      removeClient(socketId, roomCode);
-      const timer = syncDebounceTimers.get(dbRoom.id);
-      if (timer) {
-        clearTimeout(timer);
-        syncDebounceTimers.delete(dbRoom.id);
-        syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
+      try {
+        removeClient(socketId, roomCode);
+        const timer = syncDebounceTimers.get(dbRoom.id);
+        if (timer) {
+          clearTimeout(timer);
+          syncDebounceTimers.delete(dbRoom.id);
+          syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
+        }
+        broadcast(roomCode, {
+          type: "room:member_left",
+          members: getRoomMembers(roomCode),
+          userId: payload.sub,
+        });
+      } catch (err) {
+        console.error("[WS] onClose error:", err);
       }
-      broadcast(roomCode, {
-        type: "room:member_left",
-        members: getRoomMembers(roomCode),
-        userId: payload.sub,
-      });
     },
   };
 }
