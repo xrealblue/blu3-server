@@ -459,8 +459,6 @@ export async function handleWS(ws: any, url: URL) {
           const nextTrack = queue.length > 0 ? queue[0] : null;
 
           if (nextTrack) {
-            preloadStream(nextTrack.videoId).catch(() => {});
-
             const leadMs = DEFAULT_PLAY_SCHEDULE_LEAD_MS;
             const targetTime = Date.now() + leadMs;
             const seekTo = 0;
@@ -537,9 +535,6 @@ export async function handleWS(ws: any, url: URL) {
         }
         case "queue:add": {
           addToQueue(roomCode, msg.track);
-          if (msg.track?.videoId) {
-            preloadStream(msg.track.videoId).catch(() => {});
-          }
           broadcast(roomCode, {
             type: "room:queue_update",
             queue: getQueue(roomCode),
