@@ -114,6 +114,14 @@ export function getRoom(code: string) {
 export function addClient(client: WSClient) {
   const room = rooms.get(client.roomCode);
   if (room) {
+    // Close and remove any existing connection from the same user
+    for (const [existingSocketId, existing] of room.clients) {
+      if (existing.userId === client.userId) {
+        try { existing.ws.close(); } catch {}
+        room.clients.delete(existingSocketId);
+        break;
+      }
+    }
     room.clients.set(client.id, client);
     if (client.userId === room.hostId) {
       room.hostConnected = true;
@@ -148,11 +156,18 @@ export function removeClient(socketId: string, roomCode: string) {
 export function getRoomMembers(code: string) {
   const room = rooms.get(code);
   if (!room) return [];
-  return Array.from(room.clients.values()).map((c) => ({
-    userId: c.userId,
-    name: c.name,
-    avatar: c.avatar,
-  }));
+  const seen = new Set<string>();
+  return Array.from(room.clients.values())
+    .filter((c) => {
+      if (seen.has(c.userId)) return false;
+      seen.add(c.userId);
+      return true;
+    })
+    .map((c) => ({
+      userId: c.userId,
+      name: c.name,
+      avatar: c.avatar,
+    }));
 }
 
 export function isHostInRoom(code: string): boolean {
@@ -230,6 +245,8 @@ export function getQueue(code: string): QueueTrack[] {
 export function addToQueue(code: string, track: QueueTrack) {
   const room = rooms.get(code);
   if (!room) return;
+  // Skip if track with same videoId already exists anywhere in queue (prevents glitches)
+  if (room.queue.some((t) => t.videoId === track.videoId)) return;
   room.queue.splice(1, 0, track);
 }
 
