@@ -73,9 +73,9 @@ app.get("/api/search", async (c) => {
   if (!q?.trim()) return c.json({ tracks: [] });
   try {
     const yt = await getYTMusic();
-    const results = await yt.searchSongs(q);
+    const results = await yt.search(q);
     const tracks = results
-      .filter((r) => r.videoId)
+      .filter((r): r is typeof r & { videoId: string; duration: number | null; artist: { name: string } | null } => "videoId" in r && !!r.videoId)
       .map((r) => {
         const thumbs = r.thumbnails ?? [];
         const rawThumb = thumbs[thumbs.length - 1]?.url ?? "";
@@ -88,7 +88,7 @@ app.get("/api/search", async (c) => {
           duration_ms: (r.duration ?? 0) * 1000,
           explicit: false,
           artists: r.artist ? [{ name: r.artist.name }] : [],
-          album: { name: r.album?.name ?? "" },
+          album: { name: ("album" in r && r.album ? (r.album as { name: string }).name : "") },
           image,
           downloadUrl: encryptedId,
         };
