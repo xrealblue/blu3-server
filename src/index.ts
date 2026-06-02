@@ -10,7 +10,6 @@ import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic } from "./lib/ytmusic.js";
-import { encrypt } from "./lib/crypto.js";
 import { getCookieStatus } from "./lib/stream.js";
 
 const getCorsOrigins = (): string[] => {
@@ -73,12 +72,12 @@ app.get("/api/search", async (c) => {
   if (!q?.trim()) return c.json({ tracks: [] });
   try {
     const yt = await getYTMusic();
-    const results = await yt.searchVideos(q);
+    const results = await yt.searchSongs(q);
+
     const tracks = results.map((r) => {
       const thumbs = r.thumbnails ?? [];
-      const rawThumb = thumbs[thumbs.length - 1]?.url ?? "";
-      const image = rawThumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj");
-      const encryptedId = encrypt(r.videoId);
+      const thumb = thumbs[thumbs.length - 1]?.url ?? "";
+      const image = thumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj");
       return {
         id: r.videoId,
         videoId: r.videoId,
@@ -86,11 +85,11 @@ app.get("/api/search", async (c) => {
         duration_ms: (r.duration ?? 0) * 1000,
         explicit: false,
         artists: r.artist ? [{ name: r.artist.name }] : [],
-        album: { name: "" },
+        album: { name: r.album?.name ?? "" },
         image,
-        downloadUrl: encryptedId,
       };
     });
+
     return c.json({ tracks });
   } catch (err) {
     console.error("Search error:", err);
