@@ -9,7 +9,7 @@ import authRoute from "./routes/auth.js";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
-import { getYTMusic, resetYTMusic } from "./lib/ytmusic.js";
+import { getYTMusic, resetYTMusic, searchSongsWithRealVideoIds } from "./lib/ytmusic.js";
 import { getCookieStatus } from "./lib/stream.js";
 
 const getCorsOrigins = (): string[] => {
@@ -72,7 +72,7 @@ app.get("/api/search", async (c) => {
   if (!q?.trim()) return c.json({ tracks: [] });
   try {
     const yt = await getYTMusic();
-    const results = await yt.searchSongs(q);
+    const results = await searchSongsWithRealVideoIds(q);
 
     const tracks = results.map((r) => {
       const thumbs = r.thumbnails ?? [];
