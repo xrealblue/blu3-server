@@ -243,7 +243,7 @@ export function insertQueueTop(code: string, track: QueueTrack) {
   const room = rooms.get(code);
   if (!room) return;
   room.queue = room.queue.filter(
-    (t) => t.id !== track.id && t.videoId !== track.videoId,
+    (t) => t.id !== track.id || t.videoId !== track.videoId,
   );
   room.queue.unshift(track);
 }
