@@ -4,7 +4,7 @@ import { playlists, playlistTracks, users } from "../db/schema.js";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { verify } from "hono/jwt";
 import type YTMusic from "ytmusic-api";
-import { getYTMusic } from "../lib/ytmusic.js";
+import { getYTMusic, searchSongsWithRealVideoIds } from "../lib/ytmusic.js";
 
 type PlaylistsEnv = {
   Variables: {
@@ -220,15 +220,14 @@ async function resolveTrackToOfficialYouTube(
   artistName: string,
   fallbackVideoId: string,
   fallbackImage: string,
-  fallbackDurationMs: number,
-  ytmusic: YTMusic
+  fallbackDurationMs: number
 ): Promise<{ videoId: string; image: string; durationMs: number }> {
   const query = `${trackName} ${artistName !== "Unknown Artist" ? artistName : ""}`.trim();
   const apiKey = process.env.YOUTUBE_API_KEY;
 
   // 1. Prioritize ytmusic-api to get high quality square track/album art
   try {
-    const results = await ytmusic.searchSongs(query);
+    const results = await searchSongsWithRealVideoIds(query);
     const song = results[0];
     if (song && song.videoId) {
       // Loose validation check to prevent matching a wrong/unrelated song if missing in YTMusic
@@ -594,8 +593,7 @@ playlistsRoute.post("/import", async (c) => {
                 artistName,
                 fallbackVideoId,
                 fallbackImage,
-                fallbackDurationMs,
-                ytmusic
+                fallbackDurationMs
               );
 
               return {
@@ -649,7 +647,7 @@ playlistsRoute.post("/import", async (c) => {
         const resolvedList = await Promise.all(
           chunk.map(async (item: ScrapedSpotifyTrack) => {
             const resolved = await resolveTrackToOfficialYouTube(
-              item.trackName, item.artistName, "", "", 0, ytmusic
+              item.trackName, item.artistName, "", "", 0
             );
             if (resolved.videoId) {
               return {
@@ -753,7 +751,7 @@ playlistsRoute.post("/import", async (c) => {
             const trackName = item.trackName;
             const artistName = item.artistName;
 
-            const resolved = await resolveTrackToOfficialYouTube(trackName, artistName, "", "", 0, ytmusic);
+            const resolved = await resolveTrackToOfficialYouTube(trackName, artistName, "", "", 0);
             if (resolved.videoId) {
               return {
                 playlistId: newPlaylist.id,
