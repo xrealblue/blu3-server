@@ -73,26 +73,24 @@ app.get("/api/search", async (c) => {
   if (!q?.trim()) return c.json({ tracks: [] });
   try {
     const yt = await getYTMusic();
-    const results = await yt.search(q);
-    const tracks = results
-      .filter((r): r is typeof r & { videoId: string; duration: number | null; artist: { name: string } | null } => "videoId" in r && !!r.videoId)
-      .map((r) => {
-        const thumbs = r.thumbnails ?? [];
-        const rawThumb = thumbs[thumbs.length - 1]?.url ?? "";
-        const image = rawThumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj");
-        const encryptedId = encrypt(r.videoId);
-        return {
-          id: r.videoId,
-          videoId: r.videoId,
-          name: r.name,
-          duration_ms: (r.duration ?? 0) * 1000,
-          explicit: false,
-          artists: r.artist ? [{ name: r.artist.name }] : [],
-          album: { name: ("album" in r && r.album ? (r.album as { name: string }).name : "") },
-          image,
-          downloadUrl: encryptedId,
-        };
-      });
+    const results = await yt.searchVideos(q);
+    const tracks = results.map((r) => {
+      const thumbs = r.thumbnails ?? [];
+      const rawThumb = thumbs[thumbs.length - 1]?.url ?? "";
+      const image = rawThumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj");
+      const encryptedId = encrypt(r.videoId);
+      return {
+        id: r.videoId,
+        videoId: r.videoId,
+        name: r.name,
+        duration_ms: (r.duration ?? 0) * 1000,
+        explicit: false,
+        artists: r.artist ? [{ name: r.artist.name }] : [],
+        album: { name: "" },
+        image,
+        downloadUrl: encryptedId,
+      };
+    });
     return c.json({ tracks });
   } catch (err) {
     console.error("Search error:", err);
