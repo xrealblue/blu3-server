@@ -187,6 +187,26 @@ app.get("/debug/test/:id", async (c) => {
     }
   }
 
+  // Test without cookies (some clients serve public videos without auth)
+  for (const label of ["default", "ANDROID"]) {
+    try {
+      const { Innertube, Platform } = await import("youtubei.js");
+      const config: Record<string, any> = {
+        visitor_data: cookieStatus.visitorDataSet ? process.env.YT_VISITOR_DATA || undefined : undefined,
+      };
+      if (label !== "default") config.client_type = label;
+      const yt = await Innertube.create(config);
+      const info = await yt.getBasicInfo(videoId);
+      results[`${label}_no_cookies`] = {
+        hasStreamingData: !!info.streaming_data,
+        playabilityStatus: info.playability_status?.status,
+        formatCount: info.streaming_data ? (info.streaming_data.formats?.length || 0) + (info.streaming_data.adaptive_formats?.length || 0) : 0,
+      };
+    } catch (e: any) {
+      results[`${label}_no_cookies`] = { error: e?.message?.slice(0, 100) };
+    }
+  }
+
   return c.json({ cookieStatus, results });
 });
 
