@@ -10,7 +10,9 @@ import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic, searchSongsWithRealVideoIds } from "./lib/ytmusic.js";
-import { getCookieStatus, getAudioStreamUrl } from "./lib/stream.js";
+import { ensureCached, getCachedFile } from "./lib/stream.js";
+import { createReadStream, statSync } from "fs";
+import { resolve } from "path";
 
 const getCorsOrigins = (): string[] => {
   const defaultOrigins = ["http://localhost:3000", "https://blu3.in"];
@@ -98,126 +100,80 @@ app.get("/api/search", async (c) => {
   }
 });
 
-app.get("/stream/:id", async (c) => {
-  const videoId = c.req.param("id");
-  if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
-
-  const result = await getAudioStreamUrl(videoId);
-  if (!result) return c.json({ error: "Stream not available" }, 404);
-
-  const range = c.req.header("Range");
-  const upstreamHeaders: Record<string, string> = {};
-  if (range) upstreamHeaders["Range"] = range;
-
-  try {
-    const upstream = await fetch(result.url, {
-      headers: upstreamHeaders,
-      redirect: "follow",
-    });
-    if (!upstream.ok && upstream.status !== 206) {
-      return c.json({ error: "Stream unavailable" }, 502);
-    }
-
-    const proxyHeaders = new Headers(upstream.headers);
-    proxyHeaders.set("Access-Control-Allow-Origin", "*");
-    proxyHeaders.set(
-      "Access-Control-Expose-Headers",
-      "Content-Range, Accept-Ranges, Content-Length, Content-Type"
-    );
-
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: proxyHeaders,
-    });
-  } catch (err) {
-    console.error("Stream proxy error:", err);
-    return c.json({ error: "Stream proxy failed" }, 502);
-  }
-});
-
 app.get("/stream-url/:id", async (c) => {
   const videoId = c.req.param("id");
   if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
 
-  const result = await getAudioStreamUrl(videoId);
+  const result = await ensureCached(videoId);
   if (!result) return c.json({ error: "Stream not available" }, 404);
 
   return c.json({ url: result.url, mimeType: result.mimeType });
 });
 
-app.get("/debug", async (c) => {
-  return c.json({
-    status: "ok",
-    uptime: process.uptime(),
-    stream: getCookieStatus(),
+app.get("/cdn/:id", async (c) => {
+  const videoId = c.req.param("id");
+  if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
+
+  const cached = await getCachedFile(videoId);
+  if (cached) {
+    const filePath = cached.path;
+    const stat = statSync(filePath);
+    const range = c.req.header("Range");
+
+    if (range) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+      const stream = createReadStream(filePath, { start, end });
+      return new Response(stream as any, {
+        status: 206,
+        headers: {
+          "Content-Type": cached.mimeType,
+          "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+          "Content-Length": String(end - start + 1),
+          "Accept-Ranges": "bytes",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length, Content-Type",
+        },
+      });
+    }
+
+    const stream = createReadStream(filePath);
+    return new Response(stream as any, {
+      status: 200,
+      headers: {
+        "Content-Type": cached.mimeType,
+        "Content-Length": String(stat.size),
+        "Accept-Ranges": "bytes",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length, Content-Type",
+      },
+    });
+  }
+
+  const result = await ensureCached(videoId);
+  if (!result) return c.json({ error: "Stream not available" }, 404);
+
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: result.url,
+      "Access-Control-Allow-Origin": "*",
+    },
   });
 });
 
-app.get("/debug/test/:id", async (c) => {
-  const videoId = c.req.param("id");
-  const cookieStatus = getCookieStatus();
-
-  const CLIENTS = ["TV_EMBEDDED", "ANDROID", "TV", "ANDROID_VR", "TV_SIMPLY", "WEB"] as const;
-  const results: Record<string, any> = {};
-
-  // Default client
-  try {
-    const { Innertube, Platform } = await import("youtubei.js");
-    const yt = await Innertube.create({
-      cookie: cookieStatus.envCookiePresent ? process.env.YT_COOKIES || undefined : undefined,
-      visitor_data: cookieStatus.visitorDataSet ? process.env.YT_VISITOR_DATA || undefined : undefined,
-    });
-    const info = await yt.getBasicInfo(videoId);
-    results.default = {
-      hasStreamingData: !!info.streaming_data,
-      playabilityStatus: info.playability_status?.status,
-      formatCount: info.streaming_data ? (info.streaming_data.formats?.length || 0) + (info.streaming_data.adaptive_formats?.length || 0) : 0,
-    };
-  } catch (e: any) {
-    results.default = { error: e?.message?.slice(0, 100) };
-  }
-
-  // Alternative clients
-  for (const client of CLIENTS) {
-    try {
-      const { Innertube, Platform } = await import("youtubei.js");
-      const yt = await Innertube.create({
-        client_type: client as any,
-        cookie: cookieStatus.envCookiePresent ? process.env.YT_COOKIES || undefined : undefined,
-        visitor_data: cookieStatus.visitorDataSet ? process.env.YT_VISITOR_DATA || undefined : undefined,
-      });
-      const info = await yt.getBasicInfo(videoId);
-      results[client] = {
-        hasStreamingData: !!info.streaming_data,
-        playabilityStatus: info.playability_status?.status,
-        formatCount: info.streaming_data ? (info.streaming_data.formats?.length || 0) + (info.streaming_data.adaptive_formats?.length || 0) : 0,
-      };
-    } catch (e: any) {
-      results[client] = { error: e?.message?.slice(0, 100) };
-    }
-  }
-
-  // Test without cookies (some clients serve public videos without auth)
-  for (const label of ["default", "ANDROID"]) {
-    try {
-      const { Innertube, Platform } = await import("youtubei.js");
-      const config: Record<string, any> = {
-        visitor_data: cookieStatus.visitorDataSet ? process.env.YT_VISITOR_DATA || undefined : undefined,
-      };
-      if (label !== "default") config.client_type = label;
-      const yt = await Innertube.create(config);
-      const info = await yt.getBasicInfo(videoId);
-      results[`${label}_no_cookies`] = {
-        hasStreamingData: !!info.streaming_data,
-        playabilityStatus: info.playability_status?.status,
-        formatCount: info.streaming_data ? (info.streaming_data.formats?.length || 0) + (info.streaming_data.adaptive_formats?.length || 0) : 0,
-      };
-    } catch (e: any) {
-      results[`${label}_no_cookies`] = { error: e?.message?.slice(0, 100) };
-    }
-  }
-
-  return c.json({ cookieStatus, results });
+app.get("/debug", async (c) => {
+  const { existsSync } = await import("fs");
+  const { resolve } = await import("path");
+  const cacheDir = resolve(process.env.CDN_CACHE_DIR || "cache");
+  const files = existsSync(cacheDir) ? (await import("fs")).readdirSync(cacheDir) : [];
+  return c.json({
+    status: "ok",
+    uptime: process.uptime(),
+    cachedFiles: files.filter((f) => !f.includes(".downloading")).length,
+    cacheDir,
+  });
 });
 
 

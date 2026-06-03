@@ -18,6 +18,7 @@ cookies.txt
 # env
 .env
 .env.production
+.env.*
 
 # logs
 logs/
