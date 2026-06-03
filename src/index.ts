@@ -145,24 +145,49 @@ app.get("/debug", async (c) => {
 
 app.get("/debug/test/:id", async (c) => {
   const videoId = c.req.param("id");
+  const cookieStatus = getCookieStatus();
+
+  const CLIENTS = ["TV_EMBEDDED", "ANDROID", "TV", "ANDROID_VR", "TV_SIMPLY", "WEB"] as const;
+  const results: Record<string, any> = {};
+
+  // Default client
   try {
     const { Innertube, Platform } = await import("youtubei.js");
-    const cookieStatus = getCookieStatus();
     const yt = await Innertube.create({
       cookie: cookieStatus.envCookiePresent ? process.env.YT_COOKIES || undefined : undefined,
       visitor_data: cookieStatus.visitorDataSet ? process.env.YT_VISITOR_DATA || undefined : undefined,
     });
     const info = await yt.getBasicInfo(videoId);
-    return c.json({
+    results.default = {
       hasStreamingData: !!info.streaming_data,
       playabilityStatus: info.playability_status?.status,
-      streamingDataKeys: info.streaming_data ? Object.keys(info.streaming_data) : null,
       formatCount: info.streaming_data ? (info.streaming_data.formats?.length || 0) + (info.streaming_data.adaptive_formats?.length || 0) : 0,
-      cookieStatus,
-    });
-  } catch (err: any) {
-    return c.json({ error: err?.message || String(err), stack: err?.stack?.split("\n").slice(0, 5) }, 500);
+    };
+  } catch (e: any) {
+    results.default = { error: e?.message?.slice(0, 100) };
   }
+
+  // Alternative clients
+  for (const client of CLIENTS) {
+    try {
+      const { Innertube, Platform } = await import("youtubei.js");
+      const yt = await Innertube.create({
+        client_type: client as any,
+        cookie: cookieStatus.envCookiePresent ? process.env.YT_COOKIES || undefined : undefined,
+        visitor_data: cookieStatus.visitorDataSet ? process.env.YT_VISITOR_DATA || undefined : undefined,
+      });
+      const info = await yt.getBasicInfo(videoId);
+      results[client] = {
+        hasStreamingData: !!info.streaming_data,
+        playabilityStatus: info.playability_status?.status,
+        formatCount: info.streaming_data ? (info.streaming_data.formats?.length || 0) + (info.streaming_data.adaptive_formats?.length || 0) : 0,
+      };
+    } catch (e: any) {
+      results[client] = { error: e?.message?.slice(0, 100) };
+    }
+  }
+
+  return c.json({ cookieStatus, results });
 });
 
 
