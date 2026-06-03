@@ -2,6 +2,8 @@ import { Innertube, FormatUtils, Platform } from "youtubei.js";
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 
+const CLIENTS = ["TV_EMBEDDED", "ANDROID", "TV", "ANDROID_VR", "TV_SIMPLY", "WEB"] as const;
+
 function sanitizeMimeType(mime: string): string {
   return mime.split(";")[0].trim();
 }
@@ -51,20 +53,28 @@ function getCookies(): string {
   return "";
 }
 
-async function getInstance(): Promise<Innertube> {
+async function getInstance(clientType?: string): Promise<Innertube> {
   const now = Date.now();
-  if (ytInstance && now - lastInit < INIT_TTL) return ytInstance;
+  if (ytInstance && now - lastInit < INIT_TTL && !clientType) return ytInstance;
 
   const cookie = getCookies();
   const visitorData = process.env.YT_VISITOR_DATA || "";
 
-  ytInstance = await Innertube.create({
+  const config: Record<string, unknown> = {
     cookie: cookie || undefined,
     visitor_data: visitorData || undefined,
-  });
+  };
+  if (clientType) {
+    config.client_type = clientType;
+  }
 
-  lastInit = Date.now();
-  return ytInstance;
+  const instance = await Innertube.create(config);
+
+  if (!clientType) {
+    ytInstance = instance;
+    lastInit = Date.now();
+  }
+  return instance;
 }
 
 async function decipherFormat(
@@ -78,62 +88,88 @@ async function decipherFormat(
   return undefined;
 }
 
-export async function getAudioStreamUrl(videoId: string): Promise<{ url: string; mimeType: string } | null> {
-  try {
-    const yt = await getInstance();
-    console.log(`[stream] fetching info for ${videoId}`);
-    const info = await yt.getBasicInfo(videoId);
-
-    if (!info.streaming_data) {
-      console.error(`[stream] ${videoId}: no streaming_data — YouTube auth cookies may be missing or expired`);
-      return null;
-    }
-
-    const formats = [
-      ...(info.streaming_data.formats || []),
-      ...(info.streaming_data.adaptive_formats || []),
-    ];
-
-    // 1) Try chooseFormat for best audio
-    try {
-      const audioFormat = FormatUtils.chooseFormat({ type: "audio", quality: "best", format: "any" }, info.streaming_data);
-      const url = await decipherFormat(audioFormat, yt.session!.player);
-      if (url) {
-        console.log(`[stream] ${videoId}: audio-only format itag=${audioFormat.itag}`);
-        return { url, mimeType: sanitizeMimeType(audioFormat.mime_type || "audio/webm") };
-      }
-    } catch {
-      // fall through
-    }
-
-    // 2) Search all formats for one with audio + URL data
-    for (const f of formats) {
-      if (f.has_audio) {
-        const url = await decipherFormat(f, yt.session!.player);
-        if (url) {
-          console.log(`[stream] ${videoId}: found audio format itag=${f.itag} via fallback search`);
-          return { url, mimeType: sanitizeMimeType(f.mime_type || "audio/webm") };
-        }
-      }
-    }
-
-    // 3) Last resort: any format with cipher data (combined video+audio → client extracts audio)
-    for (const f of formats) {
-      if (f.signature_cipher || f.cipher || f.url) {
-        const url = await decipherFormat(f, yt.session!.player);
-        if (url) {
-          console.log(`[stream] ${videoId}: using combined format itag=${f.itag} (audio extracted on client)`);
-          return { url, mimeType: sanitizeMimeType(f.mime_type || "audio/mp4") };
-        }
-      }
-    }
-
-    console.error(`[stream] ${videoId}: no playable format found`);
-    return null;
-  } catch (err) {
-    console.error(`[stream] getAudioStreamUrl failed for ${videoId}:`, err);
+async function extractFromInfo(
+  videoId: string,
+  info: any,
+  player: any,
+  clientLabel: string,
+): Promise<{ url: string; mimeType: string } | null> {
+  if (!info.streaming_data) {
+    console.log(`[stream] ${videoId}: no streaming_data (client=${clientLabel})`);
     return null;
   }
+
+  const formats = [
+    ...(info.streaming_data.formats || []),
+    ...(info.streaming_data.adaptive_formats || []),
+  ];
+
+  // 1) chooseFormat for best audio
+  try {
+    const audioFormat = FormatUtils.chooseFormat({ type: "audio", quality: "best", format: "any" }, info.streaming_data);
+    const url = await decipherFormat(audioFormat, player);
+    if (url) {
+      console.log(`[stream] ${videoId}: audio-only itag=${audioFormat.itag} (client=${clientLabel})`);
+      return { url, mimeType: sanitizeMimeType(audioFormat.mime_type || "audio/webm") };
+    }
+  } catch { /* fall through */ }
+
+  // 2) any format with audio
+  for (const f of formats) {
+    if (f.has_audio) {
+      const url = await decipherFormat(f, player);
+      if (url) {
+        console.log(`[stream] ${videoId}: audio format itag=${f.itag} (client=${clientLabel})`);
+        return { url, mimeType: sanitizeMimeType(f.mime_type || "audio/webm") };
+      }
+    }
+  }
+
+  // 3) any playable format
+  for (const f of formats) {
+    if (f.signature_cipher || f.cipher || f.url) {
+      const url = await decipherFormat(f, player);
+      if (url) {
+        console.log(`[stream] ${videoId}: combined format itag=${f.itag} (client=${clientLabel})`);
+        return { url, mimeType: sanitizeMimeType(f.mime_type || "audio/mp4") };
+      }
+    }
+  }
+
+  console.log(`[stream] ${videoId}: no playable format (client=${clientLabel})`);
+  return null;
+}
+
+export async function getAudioStreamUrl(videoId: string): Promise<{ url: string; mimeType: string } | null> {
+  // Try default client first
+  try {
+    const yt = await getInstance();
+    console.log(`[stream] fetching info for ${videoId} (client=default)`);
+    const info = await yt.getBasicInfo(videoId);
+    const result = await extractFromInfo(videoId, info, yt.session!.player, "default");
+    if (result) return result;
+  } catch (err) {
+    console.error(`[stream] default client failed for ${videoId}:`, err);
+  }
+
+  // Fallback: try alternative clients
+  for (const client of CLIENTS) {
+    console.log(`[stream] fetching info for ${videoId} (client=${client})`);
+    try {
+      const yt = await getInstance(client);
+      const info = await yt.getBasicInfo(videoId);
+      const result = await extractFromInfo(videoId, info, yt.session!.player, client);
+      if (result) {
+        console.log(`[stream] ${videoId}: ✅ client=${client} succeeded`);
+        return result;
+      }
+    } catch (err) {
+      console.error(`[stream] client=${client} failed for ${videoId}:`, err);
+    }
+  }
+
+  console.error(`[stream] ${videoId}: all clients exhausted, no stream available`);
+  return null;
 }
 
 export function getCookieStatus() {
