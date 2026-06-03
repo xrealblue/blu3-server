@@ -55,7 +55,6 @@ function extFromMime(mime: string): string {
 
 async function fetchStreamUrl(videoId: string): Promise<{ url: string; mimeType: string } | null> {
   const cookie = process.env.YT_COOKIES || "";
-  const visitorData = process.env.YT_VISITOR_DATA || "";
 
   for (const apiKey of API_KEYS) {
     for (const client of CLIENTS) {
@@ -65,29 +64,17 @@ async function fetchStreamUrl(videoId: string): Promise<{ url: string; mimeType:
           client: {
             clientName: client.name,
             clientVersion: client.version,
-            hl: "en",
-            gl: "US",
-            utcOffsetMinutes: 0,
           },
         },
-        playbackContext: {
-          contentPlaybackContext: {
-            html5Preference: "HTML5_PREF_WANTS",
-            signatureTimestamp: 20000,
-          },
-        },
-        contentCheckOk: true,
-        racyCheckOk: true,
       };
-      if (visitorData) body.context.client.visitorData = visitorData;
       if (client.androidSdk) {
         body.context.client.androidSdkVersion = client.androidSdk;
       }
 
-      try {
-        const headers: Record<string, string> = { "Content-Type": "application/json" };
-        if (cookie) headers["Cookie"] = cookie;
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (cookie) headers["Cookie"] = cookie;
 
+      try {
         const resp = await fetch(`${YT_API_URL}?key=${apiKey}`, {
           method: "POST",
           body: JSON.stringify(body),
@@ -101,15 +88,9 @@ async function fetchStreamUrl(videoId: string): Promise<{ url: string; mimeType:
         }
 
         const data: any = await resp.json();
-
         if (!data.streamingData) {
-          const reason = data.playabilityStatus?.reason || "no streamingData";
-          const status = data.playabilityStatus?.status || "UNKNOWN";
-          if (status !== "OK") {
-            console.log(`[cdn] ${client.name} ${status} for ${videoId}: ${reason}`);
-            continue;
-          }
-          console.log(`[cdn] ${client.name} no streamingData for ${videoId}`);
+          const s = data.playabilityStatus?.status || "UNKNOWN";
+          console.log(`[cdn] ${client.name} ${s} for ${videoId}: ${data.playabilityStatus?.reason || "no streamingData"}`);
           continue;
         }
 
@@ -119,15 +100,8 @@ async function fetchStreamUrl(videoId: string): Promise<{ url: string; mimeType:
           .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
 
         const best = audioFormats.find((f: any) => f.url) || audioFormats[0];
-        if (!best) {
-          console.log(`[cdn] ${client.name} no audio format for ${videoId}`);
-          continue;
-        }
-
-        if (!best.url && (best.signatureCipher || best.cipher)) {
-          console.log(`[cdn] ${client.name} has ciphered URL for ${videoId}, falling back to Innertube`);
-          break;
-        }
+        if (!best) continue;
+        if (!best.url && (best.signatureCipher || best.cipher)) break;
 
         console.log(`[cdn] ${videoId}: ✅ ${client.name} (${Math.round((best.bitrate || 0) / 1000)}kbps)`);
         return { url: best.url, mimeType: best.mimeType.split(";")[0].trim() };
