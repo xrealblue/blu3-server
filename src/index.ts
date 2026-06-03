@@ -111,6 +111,7 @@ app.get("/stream/:id", async (c) => {
 app.get("/debug", async (c) => {
   return c.json({
     status: "ok",
+    uptime: process.uptime(),
     stream: getCookieStatus(),
   });
 });
