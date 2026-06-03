@@ -105,7 +105,34 @@ app.get("/stream/:id", async (c) => {
   const result = await getAudioStreamUrl(videoId);
   if (!result) return c.json({ error: "Stream not available" }, 404);
 
-  return c.redirect(result.url, 302);
+  const range = c.req.header("Range");
+  const upstreamHeaders: Record<string, string> = {};
+  if (range) upstreamHeaders["Range"] = range;
+
+  try {
+    const upstream = await fetch(result.url, {
+      headers: upstreamHeaders,
+      redirect: "follow",
+    });
+    if (!upstream.ok && upstream.status !== 206) {
+      return c.json({ error: "Stream unavailable" }, 502);
+    }
+
+    const proxyHeaders = new Headers(upstream.headers);
+    proxyHeaders.set("Access-Control-Allow-Origin", "*");
+    proxyHeaders.set(
+      "Access-Control-Expose-Headers",
+      "Content-Range, Accept-Ranges, Content-Length, Content-Type"
+    );
+
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: proxyHeaders,
+    });
+  } catch (err) {
+    console.error("Stream proxy error:", err);
+    return c.json({ error: "Stream proxy failed" }, 502);
+  }
 });
 
 app.get("/debug", async (c) => {

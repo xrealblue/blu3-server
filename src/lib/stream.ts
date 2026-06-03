@@ -71,8 +71,7 @@ async function decipherFormat(
   format: any,
   player: any,
 ): Promise<string | undefined> {
-  if (format.url) return format.url;
-  if (format.signature_cipher || format.cipher) {
+  if (format.url || format.signature_cipher || format.cipher) {
     const result = await format.decipher(player);
     return typeof result === "string" ? result : undefined;
   }
