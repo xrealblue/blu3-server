@@ -1,6 +1,19 @@
-import { Innertube, FormatUtils } from "youtubei.js";
+import { Innertube, FormatUtils, Platform } from "youtubei.js";
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
+
+function sanitizeMimeType(mime: string): string {
+  return mime.split(";")[0].trim();
+}
+
+Platform.load({
+  ...Platform.shim,
+  eval: (data, env) => {
+    const keys = Object.keys(env);
+    const values = keys.map((k) => env[k]);
+    return new Function(...keys, data.output)(...values);
+  },
+});
 
 let ytInstance: Innertube | null = null;
 let lastInit = 0;
@@ -54,6 +67,18 @@ async function getInstance(): Promise<Innertube> {
   return ytInstance;
 }
 
+async function decipherFormat(
+  format: any,
+  player: any,
+): Promise<string | undefined> {
+  if (format.url) return format.url;
+  if (format.signature_cipher || format.cipher) {
+    const result = await format.decipher(player);
+    return typeof result === "string" ? result : undefined;
+  }
+  return undefined;
+}
+
 export async function getAudioStreamUrl(videoId: string): Promise<{ url: string; mimeType: string } | null> {
   try {
     const yt = await getInstance();
@@ -65,35 +90,47 @@ export async function getAudioStreamUrl(videoId: string): Promise<{ url: string;
       return null;
     }
 
-    console.log(`[stream] ${videoId}: got streaming_data, choosing format`);
-    const format = FormatUtils.chooseFormat({
-      type: "audio",
-      quality: "best",
-      format: "any",
-    }, info.streaming_data);
+    const formats = [
+      ...(info.streaming_data.formats || []),
+      ...(info.streaming_data.adaptive_formats || []),
+    ];
 
-    if (!format) {
-      console.error(`[stream] ${videoId}: chooseFormat returned no audio format`);
-      return null;
+    // 1) Try chooseFormat for best audio
+    try {
+      const audioFormat = FormatUtils.chooseFormat({ type: "audio", quality: "best", format: "any" }, info.streaming_data);
+      const url = await decipherFormat(audioFormat, yt.session!.player);
+      if (url) {
+        console.log(`[stream] ${videoId}: audio-only format itag=${audioFormat.itag}`);
+        return { url, mimeType: sanitizeMimeType(audioFormat.mime_type || "audio/webm") };
+      }
+    } catch {
+      // fall through
     }
 
-    let url: string | undefined;
-    if ((format as any).url) {
-      url = (format as any).url;
-      console.log(`[stream] ${videoId}: using direct URL`);
-    } else if (format.decipher) {
-      console.log(`[stream] ${videoId}: deciphering URL`);
-      const decipherUrl = await format.decipher(yt.session!.player);
-      url = typeof decipherUrl === "string" ? decipherUrl : undefined;
+    // 2) Search all formats for one with audio + URL data
+    for (const f of formats) {
+      if (f.has_audio) {
+        const url = await decipherFormat(f, yt.session!.player);
+        if (url) {
+          console.log(`[stream] ${videoId}: found audio format itag=${f.itag} via fallback search`);
+          return { url, mimeType: sanitizeMimeType(f.mime_type || "audio/webm") };
+        }
+      }
     }
 
-    if (!url) {
-      console.error(`[stream] ${videoId}: no URL available (format has no url or cipher)`);
-      return null;
+    // 3) Last resort: any format with cipher data (combined video+audio → client extracts audio)
+    for (const f of formats) {
+      if (f.signature_cipher || f.cipher || f.url) {
+        const url = await decipherFormat(f, yt.session!.player);
+        if (url) {
+          console.log(`[stream] ${videoId}: using combined format itag=${f.itag} (audio extracted on client)`);
+          return { url, mimeType: sanitizeMimeType(f.mime_type || "audio/mp4") };
+        }
+      }
     }
 
-    console.log(`[stream] ${videoId}: got CDN URL (${url.slice(0, 60)}...)`);
-    return { url, mimeType: format.mime_type || "audio/webm" };
+    console.error(`[stream] ${videoId}: no playable format found`);
+    return null;
   } catch (err) {
     console.error(`[stream] getAudioStreamUrl failed for ${videoId}:`, err);
     return null;
