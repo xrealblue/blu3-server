@@ -116,6 +116,28 @@ app.get("/debug", async (c) => {
   });
 });
 
+app.get("/debug/test/:id", async (c) => {
+  const videoId = c.req.param("id");
+  try {
+    const { Innertube, Platform } = await import("youtubei.js");
+    const cookieStatus = getCookieStatus();
+    const yt = await Innertube.create({
+      cookie: cookieStatus.envCookiePresent ? process.env.YT_COOKIES || undefined : undefined,
+      visitor_data: cookieStatus.visitorDataSet ? process.env.YT_VISITOR_DATA || undefined : undefined,
+    });
+    const info = await yt.getBasicInfo(videoId);
+    return c.json({
+      hasStreamingData: !!info.streaming_data,
+      playabilityStatus: info.playability_status?.status,
+      streamingDataKeys: info.streaming_data ? Object.keys(info.streaming_data) : null,
+      formatCount: info.streaming_data ? (info.streaming_data.formats?.length || 0) + (info.streaming_data.adaptive_formats?.length || 0) : 0,
+      cookieStatus,
+    });
+  } catch (err: any) {
+    return c.json({ error: err?.message || String(err), stack: err?.stack?.split("\n").slice(0, 5) }, 500);
+  }
+});
+
 
 app.get("/api/suggest", async (c) => {
   const q = c.req.query("q");
