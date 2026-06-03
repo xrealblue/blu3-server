@@ -78,16 +78,17 @@ export async function getAudioStreamUrl(videoId: string): Promise<{ url: string;
     }
 
     let url: string | undefined;
-    if (format.decipher) {
+    if ((format as any).url) {
+      url = (format as any).url;
+      console.log(`[stream] ${videoId}: using direct URL`);
+    } else if (format.decipher) {
       console.log(`[stream] ${videoId}: deciphering URL`);
       const decipherUrl = await format.decipher(yt.session!.player);
       url = typeof decipherUrl === "string" ? decipherUrl : undefined;
-    } else {
-      url = (format as any).url;
     }
 
     if (!url) {
-      console.error(`[stream] ${videoId}: no URL after decipher`);
+      console.error(`[stream] ${videoId}: no URL available (format has no url or cipher)`);
       return null;
     }
 
