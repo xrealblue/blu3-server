@@ -1,9 +1,18 @@
-import { existsSync, mkdirSync, createReadStream, createWriteStream, renameSync, unlinkSync } from "fs";
-import { resolve, dirname } from "path";
-import { Readable } from "stream";
+import { existsSync, mkdirSync, createReadStream, createWriteStream, renameSync, unlinkSync, readFileSync } from "fs";
+import { resolve } from "path";
 
-const YT_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
 const YT_API_URL = "https://www.youtube.com/youtubei/v1/player";
+const API_KEYS = [
+  "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+  process.env.YOUTUBE_API_KEY,
+].filter(Boolean) as string[];
+
+const CLIENTS = [
+  { name: "ANDROID", version: "19.09.37", androidSdk: 30 },
+  { name: "ANDROID_MUSIC", version: "6.52.52", androidSdk: 30 },
+  { name: "WEB", version: "2.20250314.07.00" },
+  { name: "ANDROID_CREATOR", version: "24.10.100", androidSdk: 30 },
+];
 
 const CACHE_DIR = resolve(process.env.CDN_CACHE_DIR || "cache");
 if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
@@ -19,47 +28,84 @@ function extFromMime(mime: string): string {
 }
 
 async function fetchStreamUrl(videoId: string): Promise<{ url: string; mimeType: string } | null> {
-  const body = {
-    videoId,
-    context: {
-      client: {
-        clientName: "ANDROID",
-        clientVersion: "19.09.37",
-        androidSdkVersion: 30,
-        hl: "en",
-        gl: "US",
-      },
-    },
-  };
+  for (const apiKey of API_KEYS) {
+    for (const client of CLIENTS) {
+      const body: Record<string, any> = {
+        videoId,
+        context: {
+          client: {
+            clientName: client.name,
+            clientVersion: client.version,
+            hl: "en",
+            gl: "US",
+            utcOffsetMinutes: 0,
+          },
+        },
+        playbackContext: {
+          contentPlaybackContext: {
+            html5Preference: "HTML5_PREF_WANTS",
+            signatureTimestamp: 20000,
+          },
+        },
+        contentCheckOk: true,
+        racyCheckOk: true,
+      };
+      if (client.androidSdk) {
+        body.context.client.androidSdkVersion = client.androidSdk;
+      }
 
-  const resp = await fetch(`${YT_API_URL}?key=${YT_API_KEY}`, {
-    method: "POST",
-    body: JSON.stringify(body),
-    headers: { "Content-Type": "application/json" },
-  });
+      try {
+        const resp = await fetch(`${YT_API_URL}?key=${apiKey}`, {
+          method: "POST",
+          body: JSON.stringify(body),
+          headers: { "Content-Type": "application/json" },
+        });
 
-  if (!resp.ok) {
-    console.error(`[cdn] YouTube API error ${resp.status} for ${videoId}`);
-    return null;
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "");
+          console.log(`[cdn] ${client.name} ${resp.status} for ${videoId}${text ? ": " + text.slice(0, 120) : ""}`);
+          continue;
+        }
+
+        const data: any = await resp.json();
+
+        if (!data.streamingData) {
+          const reason = data.playabilityStatus?.reason || "no streamingData";
+          const status = data.playabilityStatus?.status || "UNKNOWN";
+          if (status !== "OK") {
+            console.log(`[cdn] ${client.name} ${status} for ${videoId}: ${reason}`);
+            continue;
+          }
+          console.log(`[cdn] ${client.name} no streamingData for ${videoId}`);
+          continue;
+        }
+
+        const formats = [...(data.streamingData.adaptiveFormats || []), ...(data.streamingData.formats || [])];
+        const audioFormats = formats
+          .filter((f: any) => !f.hasVideo && (f.mimeType || "").includes("audio"))
+          .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+
+        const best = audioFormats.find((f: any) => f.url) || audioFormats[0];
+        if (!best) {
+          console.log(`[cdn] ${client.name} no audio format for ${videoId}`);
+          continue;
+        }
+
+        let url = best.url;
+        if (!url && (best.signatureCipher || best.cipher)) {
+          console.log(`[cdn] ${client.name} has ciphered URL for ${videoId}, skipping`);
+          continue;
+        }
+
+        console.log(`[cdn] ${videoId}: ✅ ${client.name} (${Math.round((best.bitrate || 0) / 1000)}kbps)`);
+        return { url, mimeType: best.mimeType.split(";")[0].trim() };
+      } catch (err: any) {
+        console.log(`[cdn] ${client.name} error for ${videoId}: ${err?.message?.slice(0, 80)}`);
+      }
+    }
   }
 
-  const data: any = await resp.json();
-  if (!data.streamingData) {
-    console.error(`[cdn] no streamingData for ${videoId}`, JSON.stringify(data.playabilityStatus));
-    return null;
-  }
-
-  const formats = [...(data.streamingData.adaptiveFormats || []), ...(data.streamingData.formats || [])];
-  const audioFormats = formats.filter((f: any) => !f.hasVideo && (f.mimeType || "").includes("audio"))
-    .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
-
-  const best = audioFormats[0];
-  if (!best) {
-    console.error(`[cdn] no audio format for ${videoId}`);
-    return null;
-  }
-
-  return { url: best.url, mimeType: best.mimeType.split(";")[0].trim() };
+  return null;
 }
 
 function cachePath(videoId: string, ext: string): string {
