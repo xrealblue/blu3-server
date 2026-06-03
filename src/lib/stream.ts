@@ -99,10 +99,17 @@ async function extractFromInfo(
     return null;
   }
 
-  const formats = [
+  const allFormats = [
     ...(info.streaming_data.formats || []),
     ...(info.streaming_data.adaptive_formats || []),
   ];
+
+  // Sort: audio-only first (no video), then combined by lowest video height
+  const sortedFormats = [...allFormats].sort((a, b) => {
+    if (!a.has_video && b.has_video) return -1;
+    if (a.has_video && !b.has_video) return 1;
+    return (a.height || 9999) - (b.height || 9999);
+  });
 
   // 1) chooseFormat for best audio
   try {
@@ -114,8 +121,8 @@ async function extractFromInfo(
     }
   } catch { /* fall through */ }
 
-  // 2) any format with audio
-  for (const f of formats) {
+  // 2) any format with audio (audio-only first, then lowest-video combined)
+  for (const f of sortedFormats) {
     if (f.has_audio) {
       const url = await decipherFormat(f, player);
       if (url) {
@@ -125,8 +132,8 @@ async function extractFromInfo(
     }
   }
 
-  // 3) any playable format
-  for (const f of formats) {
+  // 3) any playable format (sorted by lowest video height)
+  for (const f of sortedFormats) {
     if (f.signature_cipher || f.cipher || f.url) {
       const url = await decipherFormat(f, player);
       if (url) {
