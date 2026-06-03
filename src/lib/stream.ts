@@ -27,11 +27,11 @@ export async function getAudioStreamUrl(videoId: string): Promise<{ url: string;
 
     if (!info.streaming_data) return null;
 
-    const format = FormatUtils.chooseFormat(info.streaming_data, {
+    const format = FormatUtils.chooseFormat({
       type: "audio",
       quality: "best",
       format: "any",
-    });
+    }, info.streaming_data);
 
     if (!format) return null;
 
