@@ -35,7 +35,8 @@ export async function getAudioStreamUrl(videoId: string): Promise<{ url: string;
 
     if (!format) return null;
 
-    const url = format.decipher?.(yt.session?.player) || (format as any).url;
+    const decipherUrl = format.decipher ? await format.decipher(yt.session!.player) : (format as any).url;
+    const url = typeof decipherUrl === "string" ? decipherUrl : (format as any).url;
     if (!url) return null;
 
     return { url, mimeType: format.mime_type || "audio/webm" };
