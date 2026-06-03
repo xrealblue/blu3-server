@@ -2,7 +2,7 @@ import { Innertube, FormatUtils, Platform } from "youtubei.js";
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 
-const CLIENTS = ["TV_EMBEDDED", "ANDROID", "TV", "ANDROID_VR", "TV_SIMPLY", "WEB"] as const;
+const CLIENTS = ["TV_EMBEDDED", "ANDROID", "ANDROID_VR", "WEB"] as const;
 
 function sanitizeMimeType(mime: string): string {
   return mime.split(";")[0].trim();
@@ -16,10 +16,6 @@ Platform.load({
     return new Function(...keys, data.output)(...values);
   },
 });
-
-let ytInstance: Innertube | null = null;
-let lastInit = 0;
-const INIT_TTL = 1000 * 60 * 30;
 
 function parseNetscapeCookieFile(filePath: string): string {
   try {
@@ -51,30 +47,6 @@ function getCookies(): string {
   }
 
   return "";
-}
-
-async function getInstance(clientType?: string): Promise<Innertube> {
-  const now = Date.now();
-  if (ytInstance && now - lastInit < INIT_TTL && !clientType) return ytInstance;
-
-  const cookie = getCookies();
-  const visitorData = process.env.YT_VISITOR_DATA || "";
-
-  const config: Record<string, unknown> = {
-    cookie: cookie || undefined,
-    visitor_data: visitorData || undefined,
-  };
-  if (clientType) {
-    config.client_type = clientType;
-  }
-
-  const instance = await Innertube.create(config);
-
-  if (!clientType) {
-    ytInstance = instance;
-    lastInit = Date.now();
-  }
-  return instance;
 }
 
 async function decipherFormat(
@@ -147,33 +119,54 @@ async function extractFromInfo(
   return null;
 }
 
-export async function getAudioStreamUrl(videoId: string): Promise<{ url: string; mimeType: string } | null> {
-  // Try default client first
-  try {
-    const yt = await getInstance();
-    console.log(`[stream] fetching info for ${videoId} (client=default)`);
-    const info = await yt.getBasicInfo(videoId);
-    const result = await extractFromInfo(videoId, info, yt.session!.player, "default");
-    if (result) return result;
-  } catch (err) {
-    console.error(`[stream] default client failed for ${videoId}:`, err);
-  }
-
-  // Fallback: try alternative clients
-  for (const client of CLIENTS) {
-    console.log(`[stream] fetching info for ${videoId} (client=${client})`);
+async function tryClients(
+  videoId: string,
+  clients: Array<{ label: string; clientType?: string }>,
+  withCookies: boolean,
+): Promise<{ url: string; mimeType: string } | null> {
+  for (const { label, clientType } of clients) {
+    console.log(`[stream] fetching info for ${videoId} (client=${label}, cookies=${withCookies})`);
     try {
-      const yt = await getInstance(client);
+      const config: Record<string, unknown> = {
+        visitor_data: process.env.YT_VISITOR_DATA || undefined,
+      };
+      if (withCookies) {
+        config.cookie = getCookies() || undefined;
+      }
+      if (clientType) {
+        config.client_type = clientType;
+      }
+      const yt = await Innertube.create(config);
       const info = await yt.getBasicInfo(videoId);
-      const result = await extractFromInfo(videoId, info, yt.session!.player, client);
+      const result = await extractFromInfo(videoId, info, yt.session!.player, label);
       if (result) {
-        console.log(`[stream] ${videoId}: ✅ client=${client} succeeded`);
+        console.log(`[stream] ${videoId}: ✅ client=${label} succeeded`);
         return result;
       }
     } catch (err) {
-      console.error(`[stream] client=${client} failed for ${videoId}:`, err);
+      console.error(`[stream] client=${label} failed for ${videoId}:`, err);
     }
   }
+  return null;
+}
+
+export async function getAudioStreamUrl(videoId: string): Promise<{ url: string; mimeType: string } | null> {
+  // Pass 1: try with cookies (works if cookies are fresh)
+  const withCookieClients = [
+    { label: "default" },
+    ...CLIENTS.map((c) => ({ label: c, clientType: c })),
+  ];
+  const result1 = await tryClients(videoId, withCookieClients, true);
+  if (result1) return result1;
+
+  // Pass 2: try without cookies on Oracle's clean IP (cookies expired workaround)
+  console.log(`[stream] ${videoId}: cookies failed, retrying without cookies`);
+  const noCookieClients = [
+    { label: "default_no_cookies" },
+    ...CLIENTS.map((c) => ({ label: `${c}_no_cookies`, clientType: c })),
+  ];
+  const result2 = await tryClients(videoId, noCookieClients, false);
+  if (result2) return result2;
 
   console.error(`[stream] ${videoId}: all clients exhausted, no stream available`);
   return null;
