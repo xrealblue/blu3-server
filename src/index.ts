@@ -135,6 +135,16 @@ app.get("/stream/:id", async (c) => {
   }
 });
 
+app.get("/stream-url/:id", async (c) => {
+  const videoId = c.req.param("id");
+  if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
+
+  const result = await getAudioStreamUrl(videoId);
+  if (!result) return c.json({ error: "Stream not available" }, 404);
+
+  return c.json({ url: result.url, mimeType: result.mimeType });
+});
+
 app.get("/debug", async (c) => {
   return c.json({
     status: "ok",
