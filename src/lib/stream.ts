@@ -1,23 +1,49 @@
-import { existsSync, mkdirSync, createReadStream, createWriteStream, renameSync, unlinkSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, createReadStream, createWriteStream, renameSync, unlinkSync } from "fs";
 import { resolve } from "path";
 
 const YT_API_URL = "https://www.youtube.com/youtubei/v1/player";
 const API_KEYS = [
-  "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
   process.env.YOUTUBE_API_KEY,
+  "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+  "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
 ].filter(Boolean) as string[];
 
 const CLIENTS = [
   { name: "ANDROID", version: "19.09.37", androidSdk: 30 },
-  { name: "ANDROID_MUSIC", version: "6.52.52", androidSdk: 30 },
   { name: "WEB", version: "2.20250314.07.00" },
-  { name: "ANDROID_CREATOR", version: "24.10.100", androidSdk: 30 },
 ];
 
 const CACHE_DIR = resolve(process.env.CDN_CACHE_DIR || "cache");
 if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
 
 const downloadsInProgress = new Map<string, Promise<string>>();
+
+let innertubeInstance: any = null;
+let innertubeInitializing: Promise<any> | null = null;
+
+async function getInnertube(): Promise<any> {
+  if (innertubeInstance) return innertubeInstance;
+  if (innertubeInitializing) return innertubeInitializing;
+
+  innertubeInitializing = (async () => {
+    try {
+      const { Innertube } = await import("youtubei.js");
+      const config: Record<string, any> = {};
+      const cookie = process.env.YT_COOKIES || "";
+      const visitorData = process.env.YT_VISITOR_DATA || "";
+      if (cookie) config.cookie = cookie;
+      if (visitorData) config.visitor_data = visitorData;
+      const yt = await Innertube.create(config);
+      innertubeInstance = yt;
+      console.log("[cdn] Innertube initialized");
+      return yt;
+    } finally {
+      innertubeInitializing = null;
+    }
+  })();
+
+  return innertubeInitializing;
+}
 
 function extFromMime(mime: string): string {
   const m = mime.toLowerCase();
@@ -28,6 +54,9 @@ function extFromMime(mime: string): string {
 }
 
 async function fetchStreamUrl(videoId: string): Promise<{ url: string; mimeType: string } | null> {
+  const cookie = process.env.YT_COOKIES || "";
+  const visitorData = process.env.YT_VISITOR_DATA || "";
+
   for (const apiKey of API_KEYS) {
     for (const client of CLIENTS) {
       const body: Record<string, any> = {
@@ -50,15 +79,19 @@ async function fetchStreamUrl(videoId: string): Promise<{ url: string; mimeType:
         contentCheckOk: true,
         racyCheckOk: true,
       };
+      if (visitorData) body.context.client.visitorData = visitorData;
       if (client.androidSdk) {
         body.context.client.androidSdkVersion = client.androidSdk;
       }
 
       try {
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (cookie) headers["Cookie"] = cookie;
+
         const resp = await fetch(`${YT_API_URL}?key=${apiKey}`, {
           method: "POST",
           body: JSON.stringify(body),
-          headers: { "Content-Type": "application/json" },
+          headers,
         });
 
         if (!resp.ok) {
@@ -91,14 +124,13 @@ async function fetchStreamUrl(videoId: string): Promise<{ url: string; mimeType:
           continue;
         }
 
-        let url = best.url;
-        if (!url && (best.signatureCipher || best.cipher)) {
-          console.log(`[cdn] ${client.name} has ciphered URL for ${videoId}, skipping`);
-          continue;
+        if (!best.url && (best.signatureCipher || best.cipher)) {
+          console.log(`[cdn] ${client.name} has ciphered URL for ${videoId}, falling back to Innertube`);
+          break;
         }
 
         console.log(`[cdn] ${videoId}: ✅ ${client.name} (${Math.round((best.bitrate || 0) / 1000)}kbps)`);
-        return { url, mimeType: best.mimeType.split(";")[0].trim() };
+        return { url: best.url, mimeType: best.mimeType.split(";")[0].trim() };
       } catch (err: any) {
         console.log(`[cdn] ${client.name} error for ${videoId}: ${err?.message?.slice(0, 80)}`);
       }
@@ -106,6 +138,37 @@ async function fetchStreamUrl(videoId: string): Promise<{ url: string; mimeType:
   }
 
   return null;
+}
+
+async function fetchViaInnertube(videoId: string): Promise<{ url: string; mimeType: string } | null> {
+  try {
+    const yt = await getInnertube();
+    if (!yt) return null;
+    const info = await yt.getBasicInfo(videoId);
+    if (!info.streaming_data) {
+      console.log(`[cdn] Innertube no streamingData for ${videoId}`);
+      return null;
+    }
+    const formats = [...(info.streaming_data.adaptiveFormats || []), ...(info.streaming_data.formats || [])];
+    const audioFormats = formats
+      .filter((f: any) => !f.hasVideo && (f.mimeType || "").includes("audio"))
+      .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+    const best = audioFormats[0];
+    if (!best) {
+      console.log(`[cdn] Innertube no audio format for ${videoId}`);
+      return null;
+    }
+    const url = best.url || (best.signatureCipher || best.cipher ? await best.decipher(yt.session?.player) : null);
+    if (!url) {
+      console.log(`[cdn] Innertube cannot decipher for ${videoId}`);
+      return null;
+    }
+    console.log(`[cdn] ${videoId}: ✅ Innertube (${Math.round((best.bitrate || 0) / 1000)}kbps)`);
+    return { url, mimeType: best.mimeType.split(";")[0].trim() };
+  } catch (err: any) {
+    console.log(`[cdn] Innertube error for ${videoId}: ${err?.message?.slice(0, 100)}`);
+    return null;
+  }
 }
 
 function cachePath(videoId: string, ext: string): string {
@@ -142,7 +205,11 @@ export async function ensureCached(videoId: string): Promise<{ url: string; mime
     return { url: "", mimeType: mime };
   }
 
-  const result = await fetchStreamUrl(videoId);
+  let result = await fetchStreamUrl(videoId);
+  if (!result) {
+    console.log(`[cdn] raw API failed for ${videoId}, trying Innertube`);
+    result = await fetchViaInnertube(videoId);
+  }
   if (!result) return null;
 
   const ext = extFromMime(result.mimeType);

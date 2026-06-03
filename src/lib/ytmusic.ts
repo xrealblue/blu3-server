@@ -5,6 +5,10 @@ let ytmusic: YTMusic | null = null;
 export async function getYTMusic(): Promise<YTMusic> {
   if (ytmusic) return ytmusic;
   ytmusic = new YTMusic();
+  const cookie = process.env.YT_COOKIES || "";
+  if (cookie) {
+    (ytmusic as any)._cookie = cookie;
+  }
   await ytmusic.initialize();
   return ytmusic;
 }
