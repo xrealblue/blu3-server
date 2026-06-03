@@ -10,7 +10,7 @@ import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic, searchSongsWithRealVideoIds } from "./lib/ytmusic.js";
-import { getCookieStatus } from "./lib/stream.js";
+import { getCookieStatus, getAudioStreamUrl } from "./lib/stream.js";
 
 const getCorsOrigins = (): string[] => {
   const defaultOrigins = ["http://localhost:3000", "https://blu3.in"];
@@ -98,11 +98,20 @@ app.get("/api/search", async (c) => {
   }
 });
 
+app.get("/stream/:id", async (c) => {
+  const videoId = c.req.param("id");
+  if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
+
+  const result = await getAudioStreamUrl(videoId);
+  if (!result) return c.json({ error: "Stream not available" }, 404);
+
+  return c.redirect(result.url, 302);
+});
+
 app.get("/debug", async (c) => {
   return c.json({
     status: "ok",
-    stream: "disabled — using YT IFrame API directly (Vibe-style)",
-    cookies: getCookieStatus(),
+    stream: getCookieStatus(),
   });
 });
 
