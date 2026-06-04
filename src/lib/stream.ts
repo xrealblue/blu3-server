@@ -102,7 +102,7 @@ export async function getStreamInfo(videoId: string): Promise<StreamInfo | null>
       method: "POST",
       body: JSON.stringify({
         videoId,
-        client: "TVHTML5",
+        client: "TV",
       }),
       headers: { "Content-Type": "application/json" },
     });
