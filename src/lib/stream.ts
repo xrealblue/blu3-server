@@ -22,14 +22,22 @@ async function fetchFreshVisitorId(): Promise<string | undefined> {
       redirect: "manual",
       headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
     });
+    console.log(`[stream] youtube.com fetch: status=${res.status} redirected=${res.redirected}`);
     const setCookie = res.headers.get("set-cookie");
     if (setCookie) {
+      const preview = setCookie.slice(0, 200);
+      console.log(`[stream] set-cookie preview: ${preview}...`);
       const vid = parseCookieValue(setCookie, "VISITOR_INFO1_LIVE");
       if (vid) {
-        console.log("[stream] Fetched fresh VISITOR_INFO1_LIVE");
+        console.log("[stream] Fetched fresh VISITOR_INFO1_LIVE:", vid);
         return vid;
       }
+    } else {
+      console.log("[stream] No set-cookie header from youtube.com");
     }
+    // Try to extract from redirect URL
+    const location = res.headers.get("location");
+    if (location) console.log("[stream] Redirect location:", location);
   } catch (err: any) {
     console.warn("[stream] Failed to fetch visitor ID:", err.message);
   }
@@ -60,21 +68,24 @@ async function signIn(yt: Innertube) {
   console.log("[stream] OAuth sign-in complete");
 }
 
+const ANDROID_API_KEY = "AIzaSyA8eiZmM1G6r9z-4U6B4M4h9Q9v_1X8X3c";
+
 async function createSession(): Promise<Innertube> {
   const hasOAuth = !!process.env.YT_OAUTH_REFRESH_TOKEN;
-  console.log(`[stream] Creating TVHTML5 session (auth: ${hasOAuth ? "OAuth" : "cookie"})...`);
+  console.log(`[stream] Creating ANDROID session (auth: ${hasOAuth ? "OAuth" : "cookie"})...`);
 
   const visitorId = await fetchFreshVisitorId();
   const visitorData = visitorId ? makeVisitorData(visitorId) : undefined;
   if (visitorData) console.log("[stream] Using real visitorData");
 
   const yt = await Innertube.create({
-    client_type: ClientType.TV,
+    client_type: ClientType.ANDROID,
     generate_session_locally: true,
     retrieve_player: false,
     visitor_data: visitorData,
     ...(!hasOAuth && process.env.YT_COOKIES ? { cookie: process.env.YT_COOKIES } : {}),
   });
+  yt.session.api_key = ANDROID_API_KEY;
 
   if (hasOAuth) {
     try {
