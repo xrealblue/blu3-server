@@ -1,52 +1,10 @@
-import { Innertube, ClientType, ProtoUtils } from "youtubei.js";
+import { Innertube, ClientType } from "youtubei.js";
 
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
 
 let ytInstance: Innertube | null = null;
 let sessionCreatedAt = 0;
 let sessionPromise: Promise<Innertube> | null = null;
-
-function parseCookieValue(cookieHeader: string, name: string): string | null {
-  for (const part of cookieHeader.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    const key = part.slice(0, eq).trim();
-    if (key === name) return part.slice(eq + 1).trim();
-  }
-  return null;
-}
-
-async function fetchFreshVisitorId(): Promise<string | undefined> {
-  try {
-    const res = await fetch("https://www.youtube.com", {
-      redirect: "manual",
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-    });
-    console.log(`[stream] youtube.com fetch: status=${res.status} redirected=${res.redirected}`);
-    const setCookie = res.headers.get("set-cookie");
-    if (setCookie) {
-      const preview = setCookie.slice(0, 200);
-      console.log(`[stream] set-cookie preview: ${preview}...`);
-      const vid = parseCookieValue(setCookie, "VISITOR_INFO1_LIVE");
-      if (vid) {
-        console.log("[stream] Fetched fresh VISITOR_INFO1_LIVE:", vid);
-        return vid;
-      }
-    } else {
-      console.log("[stream] No set-cookie header from youtube.com");
-    }
-    // Try to extract from redirect URL
-    const location = res.headers.get("location");
-    if (location) console.log("[stream] Redirect location:", location);
-  } catch (err: any) {
-    console.warn("[stream] Failed to fetch visitor ID:", err.message);
-  }
-  return undefined;
-}
-
-function makeVisitorData(visitorId: string): string {
-  return ProtoUtils.encodeVisitorData(visitorId, Math.floor(Date.now() / 1000));
-}
 
 async function signIn(yt: Innertube) {
   const refreshToken = process.env.YT_OAUTH_REFRESH_TOKEN;
@@ -74,15 +32,10 @@ async function createSession(): Promise<Innertube> {
   const hasOAuth = !!process.env.YT_OAUTH_REFRESH_TOKEN;
   console.log(`[stream] Creating ANDROID session (auth: ${hasOAuth ? "OAuth" : "cookie"})...`);
 
-  const visitorId = await fetchFreshVisitorId();
-  const visitorData = visitorId ? makeVisitorData(visitorId) : undefined;
-  if (visitorData) console.log("[stream] Using real visitorData");
-
   const yt = await Innertube.create({
     client_type: ClientType.ANDROID,
     generate_session_locally: true,
     retrieve_player: false,
-    visitor_data: visitorData,
     ...(!hasOAuth && process.env.YT_COOKIES ? { cookie: process.env.YT_COOKIES } : {}),
   });
   yt.session.api_key = ANDROID_API_KEY;
@@ -152,7 +105,6 @@ export async function getStreamInfo(videoId: string): Promise<StreamInfo | null>
       method: "POST",
       body: JSON.stringify({
         videoId,
-        client: "ANDROID",
       }),
       headers: { "Content-Type": "application/json" },
     });
