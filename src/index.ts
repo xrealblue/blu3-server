@@ -13,6 +13,7 @@ import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic, searchSongsWithRealVideoIds } from "./lib/ytmusic.js";
 import { getStreamInfo } from "./lib/stream.js";
+import { getAudioUrl } from "./lib/ytdl.js";
 
 
 
@@ -112,45 +113,14 @@ app.get("/cdn/:id", async (c) => {
   return c.json({ error: "CDN endpoint deprecated - client uses YT IFrame API" }, 410);
 });
 
-app.get("/api/stream/:videoId", async (c) => {
+app.get("/api/ytdl/:videoId", async (c) => {
   const videoId = c.req.param("videoId");
   if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
 
-  const info = await getStreamInfo(videoId);
-  if (!info) return c.json({ error: "Failed to get stream URL" }, 502);
+  const url = await getAudioUrl(videoId);
+  if (!url) return c.json({ error: "Failed to get audio URL" }, 502);
 
-  try {
-    const rangeHeader = c.req.header("Range");
-    const headers: Record<string, string> = {
-      "User-Agent":
-        "com.google.android.apps.youtube.music/5.34.51 " +
-        "(Linux; U; Android 11; en_US; SM-G975U Build/RP1A.200720.012) gzip",
-      "Accept-Encoding": "identity",
-    };
-    if (rangeHeader) headers["Range"] = rangeHeader;
-
-    const resp = await fetch(info.url, { headers });
-    if (!resp.ok && resp.status !== 206) {
-      console.error(`[stream] upstream ${resp.status} for ${videoId}`);
-      return c.json({ error: "Upstream fetch failed" }, 502);
-    }
-
-    c.header("Content-Type", info.mimeType);
-    c.header("Accept-Ranges", "bytes");
-    c.header("Cache-Control", "no-store");
-    c.header("Access-Control-Allow-Origin", "*");
-
-    const upCL = resp.headers.get("content-length");
-    const upCR = resp.headers.get("content-range");
-    if (upCL) c.header("Content-Length", upCL);
-    else if (info.contentLength) c.header("Content-Length", info.contentLength);
-    if (upCR) c.header("Content-Range", upCR);
-
-    return c.body(resp.body as any, resp.status === 206 ? 206 : 200);
-  } catch (err: any) {
-    console.error(`[stream] proxy error for ${videoId}:`, err.message);
-    return c.json({ error: "Stream error" }, 502);
-  }
+  return c.json({ url, videoId });
 });
 
 app.get("/debug", async (c) => {
