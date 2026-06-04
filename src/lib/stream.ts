@@ -6,9 +6,6 @@ let ytInstance: Innertube | null = null;
 let sessionCreatedAt = 0;
 let sessionPromise: Promise<Innertube> | null = null;
 
-const ANDROID_API_KEY = "AIzaSyA8eiZmM1G6r9z-4U6B4M4h9Q9v_1X8X3c";
-const INNERTUBE_API = "https://www.youtube.com/youtubei/v1";
-
 async function signIn(yt: Innertube) {
   const refreshToken = process.env.YT_OAUTH_REFRESH_TOKEN;
   if (!refreshToken) return;
@@ -31,15 +28,14 @@ async function signIn(yt: Innertube) {
 
 async function createSession(): Promise<Innertube> {
   const hasOAuth = !!process.env.YT_OAUTH_REFRESH_TOKEN;
-  console.log(`[stream] Creating session (auth: ${hasOAuth ? "OAuth" : "cookie"})...`);
+  console.log(`[stream] Creating TVHTML5 session (auth: ${hasOAuth ? "OAuth" : "cookie"})...`);
 
   const yt = await Innertube.create({
-    client_type: ClientType.WEB,
+    client_type: ClientType.TV,
     generate_session_locally: true,
     retrieve_player: false,
     ...(!hasOAuth && process.env.YT_COOKIES ? { cookie: process.env.YT_COOKIES } : {}),
   });
-  yt.session.api_key = ANDROID_API_KEY;
 
   if (hasOAuth) {
     try {
@@ -49,6 +45,7 @@ async function createSession(): Promise<Innertube> {
     }
   }
 
+  console.log(`[stream] Session ready, client: ${yt.session.context?.client?.clientName}, auth: ${hasOAuth ? "OAuth" : "cookie"}`);
   return yt;
 }
 
@@ -71,20 +68,6 @@ async function getSession(): Promise<Innertube> {
 }
 
 getSession().catch((err) => console.warn("[stream] Pre-warm failed:", err.message));
-
-const ANDROID_CONTEXT = {
-  client: {
-    clientName: "ANDROID",
-    clientVersion: "21.03.36",
-    androidSdkVersion: 36,
-    osName: "Android",
-    osVersion: "13",
-    platform: "MOBILE",
-    hl: "en",
-    gl: "US",
-    utcOffsetMinutes: 0,
-  },
-};
 
 function val(obj: any, ...keys: string[]) {
   for (const k of keys) {
@@ -115,41 +98,15 @@ export async function getStreamInfo(videoId: string): Promise<StreamInfo | null>
   try {
     const yt = await getSession();
 
-    const accessToken = yt.session.oauth?.oauth2_tokens?.access_token;
-
-    const body = {
-      context: ANDROID_CONTEXT,
-      videoId,
-    };
-
-    const url = `${INNERTUBE_API}/player?key=${ANDROID_API_KEY}&prettyPrint=false&alt=json`;
-
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      "User-Agent": "com.google.android.youtube/21.03.36(Linux; U; Android 16; en_US; SM-S908E Build/TP1A.220624.014) gzip",
-      "X-GOOG-API-FORMAT-VERSION": "2",
-      "Accept": "*/*",
-      "Accept-Language": "*",
-      "Origin": "https://www.youtube.com",
-    };
-
-    if (accessToken) {
-      headers["Authorization"] = `Bearer ${accessToken}`;
-    }
-
-    const res = await fetch(url, {
+    const raw = await yt.session.http.fetch("/player", {
       method: "POST",
-      headers,
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        videoId,
+        client: "TVHTML5",
+      }),
+      headers: { "Content-Type": "application/json" },
     });
-
-    if (!res.ok) {
-      const text = await res.text();
-      console.error(`[stream] ${videoId}: HTTP ${res.status}`, text.slice(0, 500));
-      return null;
-    }
-
-    const data = await res.json();
+    const data = await raw.json();
 
     if (!data.streamingData) {
       const ps = data.playabilityStatus || {};
@@ -202,6 +159,7 @@ export async function getStreamInfo(videoId: string): Promise<StreamInfo | null>
     };
   } catch (err: any) {
     console.error(`[stream] getStreamInfo error for ${videoId}:`, err.message);
+    if (err.info) console.error(`[stream]   response body:`, typeof err.info === "string" ? err.info.slice(0, 500) : JSON.stringify(err.info).slice(0, 500));
     if (err.stack) console.error(err.stack.split("\n").slice(0, 5).join("\n"));
     return null;
   }
