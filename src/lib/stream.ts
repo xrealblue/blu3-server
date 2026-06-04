@@ -44,7 +44,7 @@ async function createSession(): Promise<Innertube> {
     }
   }
 
-  console.log("[stream] Session ready, client:", yt.session.context?.client?.clientName);
+  console.log(`[stream] Session ready, client: ${yt.session.context?.client?.clientName}, auth: ${hasOAuth ? "OAuth" : "cookie"}`);
   return yt;
 }
 
@@ -116,8 +116,11 @@ export async function getStreamInfo(videoId: string): Promise<StreamInfo | null>
     const data = await raw.json();
 
     if (!data.streamingData) {
-      const status = data.playabilityStatus?.status;
-      console.error(`[stream] ${videoId}: no streamingData, playability=${status}`);
+      const ps = data.playabilityStatus || {};
+      const reason = ps.reason || ps.messages?.[0] || "(no reason)";
+      console.error(`[stream] ${videoId}: no streamingData, playability=${ps.status}, reason=${reason}`);
+      if (ps.errorScreen) console.error(`[stream]   errorScreen:`, JSON.stringify(ps.errorScreen).slice(0, 500));
+      if (data.serverAbrStreamingUrl) console.error(`[stream]   serverAbrStreamingUrl present`);
       return null;
     }
 
