@@ -2,18 +2,23 @@ import { Innertube, ClientType } from "youtubei.js";
 
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
 
+const ANDROID_API_KEY = "AIzaSyA8eiZmM1G6r9z-4U6B4M4h9Q9v_1X8X3c";
+
 let ytInstance: Innertube | null = null;
 let sessionCreatedAt = 0;
 let sessionPromise: Promise<Innertube> | null = null;
 
 async function createSession(): Promise<Innertube> {
-  console.log("[stream] Creating WEB_REMIX session...");
+  console.log("[stream] Creating ANDROID session...");
   const yt = await Innertube.create({
-    client_type: ClientType.MUSIC,
+    client_type: ClientType.ANDROID,
     generate_session_locally: true,
     retrieve_player: false,
     ...(process.env.YT_COOKIES ? { cookie: process.env.YT_COOKIES } : {}),
   });
+  // ANDROID client needs the correct API key — the locally generated session
+  // uses the WEB key (AIzaSyAO_F...) which YouTube rejects with 400.
+  yt.session.api_key = ANDROID_API_KEY;
   console.log("[stream] Session ready, client:", yt.session.context?.client?.clientName);
   return yt;
 }
@@ -90,7 +95,7 @@ export async function getStreamInfo(videoId: string): Promise<StreamInfo | null>
     }
 
     if (!url) {
-      const info = await yt.getInfo(videoId);
+      const info = await yt.getBasicInfo(videoId);
       const allFormats = [
         ...(info.streaming_data?.formats || []),
         ...(info.streaming_data?.adaptive_formats || []),
