@@ -27,15 +27,16 @@ async function signIn(yt: Innertube) {
 }
 
 async function createSession(): Promise<Innertube> {
-  console.log("[stream] Creating TVHTML5 session...");
+  const hasOAuth = !!process.env.YT_OAUTH_REFRESH_TOKEN;
+  console.log(`[stream] Creating TVHTML5 session (auth: ${hasOAuth ? "OAuth" : "cookie"})...`);
   const yt = await Innertube.create({
     client_type: ClientType.TV,
     generate_session_locally: true,
     retrieve_player: false,
-    ...(process.env.YT_COOKIES ? { cookie: process.env.YT_COOKIES } : {}),
+    ...(!hasOAuth && process.env.YT_COOKIES ? { cookie: process.env.YT_COOKIES } : {}),
   });
 
-  if (process.env.YT_OAUTH_REFRESH_TOKEN) {
+  if (hasOAuth) {
     try {
       await signIn(yt);
     } catch (err: any) {
