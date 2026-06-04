@@ -1,71 +1,115 @@
-import { Innertube, Platform } from "youtubei.js";
+import { Innertube, ClientType } from "youtubei.js";
 
-Platform.load({
-  ...Platform.shim,
-  eval: (data: any, env: any) => {
-    const keys = Object.keys(env);
-    const values = keys.map((k: string) => env[k]);
-    return new Function(...keys, data.output)(...values);
-  },
-});
+const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
 
 let ytInstance: Innertube | null = null;
+let sessionCreatedAt = 0;
+let sessionPromise: Promise<Innertube> | null = null;
 
-async function getYtInstance(): Promise<Innertube> {
-  if (!ytInstance) {
-    ytInstance = await Innertube.create({
-      cookie: process.env.YT_COOKIES || "",
-    });
-  }
-  return ytInstance;
+async function createSession(): Promise<Innertube> {
+  console.log("[stream] Creating ANDROID_MUSIC session...");
+  const yt = await Innertube.create({
+    client_type: ClientType.ANDROID_MUSIC,
+    retrieve_player: false,
+    generate_session_locally: true,
+    ...(process.env.YT_COOKIES ? { cookie: process.env.YT_COOKIES } : {}),
+  });
+  console.log("[stream] Session ready, client:", yt.session.context?.client?.clientName);
+  return yt;
 }
 
-export async function getStreamUrl(videoId: string): Promise<string | null> {
+async function getSession(): Promise<Innertube> {
+  const now = Date.now();
+  if (ytInstance && now - sessionCreatedAt < SESSION_TTL_MS) return ytInstance;
+  if (sessionPromise) return sessionPromise;
+  sessionPromise = createSession()
+    .then((yt) => {
+      ytInstance = yt;
+      sessionCreatedAt = Date.now();
+      sessionPromise = null;
+      return yt;
+    })
+    .catch((err) => {
+      sessionPromise = null;
+      throw err;
+    });
+  return sessionPromise;
+}
+
+getSession().catch((err) => console.warn("[stream] Pre-warm failed:", err.message));
+
+interface AudioFormat {
+  url?: string | null;
+  mime_type?: string;
+  has_video?: boolean;
+  has_audio?: boolean;
+  bitrate?: number;
+  content_length?: number;
+}
+
+function pickBestAudio(formats: AudioFormat[]): AudioFormat | null {
+  const audioOnly = formats.filter((f) => f.url && !f.has_video && f.has_audio);
+  if (!audioOnly.length) return null;
+  const byBitrate = (a: AudioFormat, b: AudioFormat) => (b.bitrate ?? 0) - (a.bitrate ?? 0);
+  const opus = audioOnly.filter((f) => f.mime_type?.includes("opus")).sort(byBitrate);
+  if (opus.length) return opus[0];
+  const aac = audioOnly.filter((f) => f.mime_type?.includes("mp4")).sort(byBitrate);
+  if (aac.length) return aac[0];
+  return audioOnly.sort(byBitrate)[0];
+}
+
+export interface StreamInfo {
+  url: string;
+  mimeType: string;
+  contentLength: string | null;
+  bitrate: number | null;
+}
+
+export async function getStreamInfo(videoId: string): Promise<StreamInfo | null> {
   try {
-    const yt = await getYtInstance();
-    console.log(`[stream] got innertube instance, fetching ${videoId}`);
-    const info = await yt.getBasicInfo(videoId);
-    const streamingData = info.streaming_data;
-    if (!streamingData) {
-      console.error(`[stream] no streaming_data for ${videoId} — keys: ${Object.keys(info).join(",")}`);
-      return null;
-    }
+    const yt = await getSession();
+    let url: string | null = null;
+    let mimeType = "audio/webm";
+    let contentLength: string | null = null;
+    let bitrate: number | null = null;
 
-    const formats = [
-      ...(streamingData.formats || []),
-      ...(streamingData.adaptive_formats || []),
-    ];
-    console.log(`[stream] ${videoId}: ${formats.length} total formats`);
-
-    const audioFormats = formats.filter(
-      (f: any) => f.has_audio && !f.has_video,
-    );
-    console.log(`[stream] ${videoId}: ${audioFormats.length} audio-only formats`);
-    audioFormats.sort(
-      (a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0),
-    );
-
-    for (const f of audioFormats) {
-      let url: string | null = (f as any).url || null;
-      if (!url) {
-        console.log(`[stream] format ${(f as any).itag}: no direct URL, trying decipher`);
-        try {
-          url = (await (f as any).decipher(yt.session!.player)) as string;
-          console.log(`[stream] format ${(f as any).itag}: decipher succeeded`);
-        } catch (e: any) {
-          console.error(`[stream] format ${(f as any).itag}: decipher failed: ${e.message}`);
-        }
-      } else {
-        console.log(`[stream] format ${(f as any).itag}: has direct URL`);
+    try {
+      const format = await yt.getStreamingData(videoId, {
+        type: "audio",
+        quality: "best",
+        format: "any",
+      });
+      if (format.url) {
+        url = format.url;
+        mimeType = format.mime_type || mimeType;
+        contentLength = format.content_length != null ? String(format.content_length) : null;
+        bitrate = format.bitrate ?? null;
       }
-      if (url) return url;
+    } catch (e: any) {
+      console.warn(`[stream] getStreamingData failed for ${videoId}:`, e.message);
     }
 
-    console.error(`[stream] no decipherable audio URL for ${videoId}`);
-    return null;
+    if (!url) {
+      const info = await yt.getInfo(videoId);
+      const allFormats = [
+        ...(info.streaming_data?.formats || []),
+        ...(info.streaming_data?.adaptive_formats || []),
+      ];
+      const picked = pickBestAudio(allFormats as any);
+      if (!picked?.url) {
+        console.error(`[stream] no audio URL for ${videoId}`);
+        return null;
+      }
+      url = picked.url;
+      mimeType = picked.mime_type || mimeType;
+      contentLength = picked.content_length != null ? String(picked.content_length) : null;
+      bitrate = picked.bitrate ?? null;
+    }
+
+    return { url, mimeType, contentLength, bitrate };
   } catch (err: any) {
-    console.error(`[stream] getStreamUrl error for ${videoId}:`, err.message);
-    if (err.stack) console.error(`[stream] stack:`, err.stack.split("\n").slice(0, 5).join("\n"));
+    console.error(`[stream] getStreamInfo error for ${videoId}:`, err.message);
+    if (err.stack) console.error(err.stack.split("\n").slice(0, 5).join("\n"));
     return null;
   }
 }

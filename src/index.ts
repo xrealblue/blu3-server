@@ -10,7 +10,7 @@ import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic, searchSongsWithRealVideoIds } from "./lib/ytmusic.js";
-import { getStreamUrl } from "./lib/stream.js";
+import { getStreamInfo } from "./lib/stream.js";
 
 
 
