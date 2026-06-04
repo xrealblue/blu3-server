@@ -8,6 +8,25 @@ let ytInstance: Innertube | null = null;
 let sessionCreatedAt = 0;
 let sessionPromise: Promise<Innertube> | null = null;
 
+async function signIn(yt: Innertube) {
+  const refreshToken = process.env.YT_OAUTH_REFRESH_TOKEN;
+  if (!refreshToken) return;
+
+  const clientId = process.env.YT_OAUTH_CLIENT_ID;
+  const clientSecret = process.env.YT_OAUTH_CLIENT_SECRET;
+
+  const tokens: any = {
+    access_token: process.env.YT_OAUTH_ACCESS_TOKEN || "placeholder",
+    refresh_token: refreshToken,
+    expiry_date: process.env.YT_OAUTH_EXPIRY_DATE || new Date(0).toISOString(),
+  };
+  if (clientId && clientSecret) {
+    tokens.client = { client_id: clientId, client_secret: clientSecret };
+  }
+  await yt.session.signIn(tokens);
+  console.log("[stream] OAuth sign-in complete");
+}
+
 async function createSession(): Promise<Innertube> {
   console.log("[stream] Creating ANDROID session...");
   const yt = await Innertube.create({
@@ -17,6 +36,15 @@ async function createSession(): Promise<Innertube> {
     ...(process.env.YT_COOKIES ? { cookie: process.env.YT_COOKIES } : {}),
   });
   yt.session.api_key = ANDROID_API_KEY;
+
+  if (process.env.YT_OAUTH_REFRESH_TOKEN) {
+    try {
+      await signIn(yt);
+    } catch (err: any) {
+      console.error("[stream] OAuth sign-in failed:", err.message);
+    }
+  }
+
   console.log("[stream] Session ready, client:", yt.session.context?.client?.clientName);
   return yt;
 }
