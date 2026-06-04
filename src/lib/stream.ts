@@ -153,15 +153,6 @@ export async function getStreamInfo(videoId: string): Promise<StreamInfo | null>
       body: JSON.stringify({
         videoId,
         client: "ANDROID",
-        racyCheckOk: true,
-        contentCheckOk: true,
-        playbackContext: {
-          contentPlaybackContext: {
-            vis: 0,
-            splay: false,
-            lactMilliseconds: "-1",
-          },
-        },
       }),
       headers: { "Content-Type": "application/json" },
     });
