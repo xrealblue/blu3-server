@@ -1,10 +1,44 @@
-import { Innertube, ClientType } from "youtubei.js";
+import { Innertube, ClientType, ProtoUtils } from "youtubei.js";
 
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
 
 let ytInstance: Innertube | null = null;
 let sessionCreatedAt = 0;
 let sessionPromise: Promise<Innertube> | null = null;
+
+function parseCookieValue(cookieHeader: string, name: string): string | null {
+  for (const part of cookieHeader.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    const key = part.slice(0, eq).trim();
+    if (key === name) return part.slice(eq + 1).trim();
+  }
+  return null;
+}
+
+async function fetchFreshVisitorId(): Promise<string | undefined> {
+  try {
+    const res = await fetch("https://www.youtube.com", {
+      redirect: "manual",
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+    });
+    const setCookie = res.headers.get("set-cookie");
+    if (setCookie) {
+      const vid = parseCookieValue(setCookie, "VISITOR_INFO1_LIVE");
+      if (vid) {
+        console.log("[stream] Fetched fresh VISITOR_INFO1_LIVE");
+        return vid;
+      }
+    }
+  } catch (err: any) {
+    console.warn("[stream] Failed to fetch visitor ID:", err.message);
+  }
+  return undefined;
+}
+
+function makeVisitorData(visitorId: string): string {
+  return ProtoUtils.encodeVisitorData(visitorId, Math.floor(Date.now() / 1000));
+}
 
 async function signIn(yt: Innertube) {
   const refreshToken = process.env.YT_OAUTH_REFRESH_TOKEN;
@@ -29,10 +63,16 @@ async function signIn(yt: Innertube) {
 async function createSession(): Promise<Innertube> {
   const hasOAuth = !!process.env.YT_OAUTH_REFRESH_TOKEN;
   console.log(`[stream] Creating TVHTML5 session (auth: ${hasOAuth ? "OAuth" : "cookie"})...`);
+
+  const visitorId = await fetchFreshVisitorId();
+  const visitorData = visitorId ? makeVisitorData(visitorId) : undefined;
+  if (visitorData) console.log("[stream] Using real visitorData");
+
   const yt = await Innertube.create({
     client_type: ClientType.TV,
     generate_session_locally: true,
     retrieve_player: false,
+    visitor_data: visitorData,
     ...(!hasOAuth && process.env.YT_COOKIES ? { cookie: process.env.YT_COOKIES } : {}),
   });
 
