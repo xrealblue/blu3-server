@@ -152,6 +152,7 @@ export async function getStreamInfo(videoId: string): Promise<StreamInfo | null>
       method: "POST",
       body: JSON.stringify({
         videoId,
+        client: "ANDROID",
         racyCheckOk: true,
         contentCheckOk: true,
         playbackContext: {
@@ -217,6 +218,7 @@ export async function getStreamInfo(videoId: string): Promise<StreamInfo | null>
     };
   } catch (err: any) {
     console.error(`[stream] getStreamInfo error for ${videoId}:`, err.message);
+    if (err.info) console.error(`[stream]   response body:`, typeof err.info === "string" ? err.info.slice(0, 500) : JSON.stringify(err.info).slice(0, 500));
     if (err.stack) console.error(err.stack.split("\n").slice(0, 5).join("\n"));
     return null;
   }
