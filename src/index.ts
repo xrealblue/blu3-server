@@ -10,9 +10,8 @@ import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic, searchSongsWithRealVideoIds } from "./lib/ytmusic.js";
-import { ensureCached, getCachedFile } from "./lib/stream.js";
-import { createReadStream, statSync } from "fs";
-import { resolve } from "path";
+
+
 
 const getCorsOrigins = (): string[] => {
   const defaultOrigins = ["http://localhost:3000", "https://blu3.in"];
@@ -103,64 +102,11 @@ app.get("/api/search", async (c) => {
 app.get("/stream-url/:id", async (c) => {
   const videoId = c.req.param("id");
   if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
-
-  const result = await ensureCached(videoId);
-  if (!result) return c.json({ error: "Stream not available" }, 404);
-
-  return c.json({ url: result.url, mimeType: result.mimeType });
+  return c.json({ error: "Stream URL endpoint deprecated - client uses YT IFrame API" }, 410);
 });
 
 app.get("/cdn/:id", async (c) => {
-  const videoId = c.req.param("id");
-  if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
-
-  const cached = await getCachedFile(videoId);
-  if (cached) {
-    const filePath = cached.path;
-    const stat = statSync(filePath);
-    const range = c.req.header("Range");
-
-    if (range) {
-      const parts = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-      const stream = createReadStream(filePath, { start, end });
-      return new Response(stream as any, {
-        status: 206,
-        headers: {
-          "Content-Type": cached.mimeType,
-          "Content-Range": `bytes ${start}-${end}/${stat.size}`,
-          "Content-Length": String(end - start + 1),
-          "Accept-Ranges": "bytes",
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length, Content-Type",
-        },
-      });
-    }
-
-    const stream = createReadStream(filePath);
-    return new Response(stream as any, {
-      status: 200,
-      headers: {
-        "Content-Type": cached.mimeType,
-        "Content-Length": String(stat.size),
-        "Accept-Ranges": "bytes",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length, Content-Type",
-      },
-    });
-  }
-
-  const result = await ensureCached(videoId);
-  if (!result) return c.json({ error: "Stream not available" }, 404);
-
-  return new Response(null, {
-    status: 302,
-    headers: {
-      Location: result.url,
-      "Access-Control-Allow-Origin": "*",
-    },
-  });
+  return c.json({ error: "CDN endpoint deprecated - client uses YT IFrame API" }, 410);
 });
 
 app.get("/debug", async (c) => {

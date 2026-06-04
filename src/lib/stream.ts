@@ -1,11 +1,12 @@
-import { Innertube } from "youtubei.js";
 import { existsSync, mkdirSync, createReadStream, createWriteStream, renameSync, unlinkSync } from "fs";
 import { resolve } from "path";
+import { createHash } from "crypto";
 
 const CACHE_DIR = resolve(process.env.CDN_CACHE_DIR || "cache");
 if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
 
-const downloadsInProgress = new Map<string, Promise<string>>();
+const downloadsInProgress = new Map<string, { promise: Promise<string>; streamUrl: string }>();
+const streamUrlCache = new Map<string, string>();
 
 function extFromMime(mime: string): string {
   const m = mime.toLowerCase();
@@ -15,44 +16,122 @@ function extFromMime(mime: string): string {
   return "m4a";
 }
 
-let innertubeInstance: Innertube | null = null;
-
-async function getInnertube(): Promise<Innertube> {
-  if (innertubeInstance) return innertubeInstance;
-  const cookie = process.env.YT_COOKIES || "";
-  innertubeInstance = await Innertube.create({
-    cookie,
-  });
-  return innertubeInstance;
+function parseCookies(cookieString: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const part of cookieString.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    const key = part.substring(0, eq).trim();
+    const val = part.substring(eq + 1).trim();
+    result[key] = val;
+  }
+  return result;
 }
 
-export function resetInnertube(): void {
-  innertubeInstance = null;
+function sha1(input: string): string {
+  return createHash("sha1").update(input).digest("hex");
+}
+
+function buildHeaders(cookieString: string): Record<string, string> {
+  const cookies = parseCookies(cookieString);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  const cookieParts: string[] = [];
+  for (const [key, val] of Object.entries(cookies)) {
+    cookieParts.push(`${key}=${val}`);
+  }
+  if (cookieParts.length > 0) {
+    headers["Cookie"] = cookieParts.join("; ");
+  }
+
+  const sapisid = cookies["__Secure-3PAPISID"] || cookies["SAPISID"] || cookies["__Secure-1PAPISID"] || "";
+  if (sapisid) {
+    const time = Math.floor(Date.now() / 1000);
+    const hash = sha1(`${time} ${sapisid} https://www.youtube.com`);
+    headers["Authorization"] = `SAPISIDHASH ${time}_${hash}`;
+    headers["X-Origin"] = "https://www.youtube.com";
+    headers["Origin"] = "https://www.youtube.com";
+  }
+
+  return headers;
+}
+
+const API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+
+function buildRequestBody(videoId: string): any {
+  return {
+    videoId,
+    context: {
+      client: {
+        clientName: "WEB",
+        clientVersion: "2.20250204.00.00",
+        hl: "en",
+        gl: "US",
+      },
+    },
+    contentCheckOk: true,
+    racyCheckOk: true,
+  };
 }
 
 async function fetchStreamUrl(videoId: string): Promise<{ url: string; mimeType: string } | null> {
+  const cookieString = process.env.YT_COOKIES || "";
+  if (!cookieString) {
+    console.error("[stream] No YT_COOKIES set");
+    return null;
+  }
+
   try {
-    const yt = await getInnertube();
-    const info = await yt.getInfo(videoId);
+    const resp = await fetch(
+      `https://www.youtube.com/youtubei/v1/player?key=${API_KEY}`,
+      {
+        method: "POST",
+        body: JSON.stringify(buildRequestBody(videoId)),
+        headers: buildHeaders(cookieString),
+      },
+    );
 
-    const formats = info.chooseFormat({ type: "audio", quality: "best" });
-    if (!formats) {
-      console.log(`[stream] no audio format for ${videoId}`);
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.error(`[stream] player API ${resp.status}: ${text.slice(0, 200)}`);
       return null;
     }
 
-    const format = Array.isArray(formats) ? formats[0] : formats;
-    const url = format?.decipher(yt.session.player) || "";
-    if (!url) {
-      console.log(`[stream] no deciphered URL for ${videoId}`);
+    const data: any = await resp.json();
+
+    const formats = data?.streamingData?.adaptiveFormats || data?.streamingData?.formats || [];
+    const audioFormats = formats.filter(
+      (f: any) => (f.mimeType || "").toLowerCase().includes("audio"),
+    );
+
+    if (audioFormats.length === 0) {
+      console.error(`[stream] no audio formats for ${videoId}`);
       return null;
     }
 
-    const mimeType = format.mime_type?.split(";")[0]?.trim() || "audio/mp4";
-    console.log(`[stream] got stream for ${videoId} (${mimeType})`);
-    return { url, mimeType };
+    for (const f of audioFormats) {
+      let url = f.url || null;
+      if (!url && f.signatureCipher) {
+        const params = new URLSearchParams(f.signatureCipher);
+        url = params.get("url");
+      }
+      if (!url && f.cipher) {
+        const params = new URLSearchParams(f.cipher);
+        url = params.get("url");
+      }
+      if (url) {
+        const mimeType = (f.mimeType || "").split(";")[0].trim() || "audio/mp4";
+        console.log(`[stream] got stream for ${videoId}`);
+        return { url, mimeType };
+      }
+    }
+
+    console.error(`[stream] no decipherable URL for ${videoId}`);
+    return null;
   } catch (err: any) {
-    console.error(`[stream] error for ${videoId}:`, err.message);
+    console.error(`[stream] fetch error for ${videoId}:`, err.message);
     return null;
   }
 }
@@ -83,16 +162,30 @@ export async function ensureCached(videoId: string): Promise<{ url: string; mime
     return { url: "", mimeType: cached.mimeType };
   }
 
+  const cachedUrl = streamUrlCache.get(videoId);
+  if (cachedUrl) {
+    console.log(`[cdn] cached stream URL for ${videoId}`);
+    return { url: cachedUrl, mimeType: "audio/mp4" };
+  }
+
   const existing = downloadsInProgress.get(videoId);
   if (existing) {
     console.log(`[cdn] download already in progress for ${videoId}, waiting`);
-    const ext = await existing;
-    const mime = ext === "m4a" ? "audio/mp4" : ext === "webm" ? "audio/webm" : "audio/opus";
-    return { url: "", mimeType: mime };
+    try {
+      const ext = await existing.promise;
+      const mime = ext === "m4a" ? "audio/mp4" : ext === "webm" ? "audio/webm" : "audio/opus";
+      if (existing.streamUrl) streamUrlCache.set(videoId, existing.streamUrl);
+      return { url: existing.streamUrl, mimeType: mime };
+    } catch {
+      downloadsInProgress.delete(videoId);
+      console.log(`[cdn] previous download failed for ${videoId}, retrying`);
+    }
   }
 
   const result = await fetchStreamUrl(videoId);
   if (!result) return null;
+
+  streamUrlCache.set(videoId, result.url);
 
   const ext = extFromMime(result.mimeType);
   const tmp = tmpPath(videoId, ext);
@@ -119,14 +212,17 @@ export async function ensureCached(videoId: string): Promise<{ url: string; mime
       console.log(`[cdn] cached ${videoId} (${ext})`);
       return ext;
     } catch (err: any) {
+      console.error(`[cdn] download failed for ${videoId}:`, err.message);
       try { unlinkSync(tmp); } catch {}
-      downloadsInProgress.delete(videoId);
-      throw err;
+      return "";
     }
   })();
 
-  downloadsInProgress.set(videoId, downloadPromise);
-  downloadPromise.finally(() => downloadsInProgress.delete(videoId));
+  downloadsInProgress.set(videoId, { promise: downloadPromise, streamUrl: result.url });
+  downloadPromise.finally(() => {
+    downloadsInProgress.delete(videoId);
+    streamUrlCache.delete(videoId);
+  });
 
   return { url: result.url, mimeType: result.mimeType };
 }
