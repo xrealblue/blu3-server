@@ -7,11 +7,10 @@ let sessionCreatedAt = 0;
 let sessionPromise: Promise<Innertube> | null = null;
 
 async function createSession(): Promise<Innertube> {
-  console.log("[stream] Creating ANDROID_MUSIC session...");
+  console.log("[stream] Creating ANDROID session...");
   const yt = await Innertube.create({
-    client_type: ClientType.ANDROID_MUSIC,
+    client_type: ClientType.ANDROID,
     retrieve_player: false,
-    generate_session_locally: true,
     ...(process.env.YT_COOKIES ? { cookie: process.env.YT_COOKIES } : {}),
   });
   console.log("[stream] Session ready, client:", yt.session.context?.client?.clientName);
