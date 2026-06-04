@@ -24,6 +24,7 @@ async function signIn(yt: Innertube) {
     tokens.client = { client_id: clientId, client_secret: clientSecret };
   }
   await yt.session.signIn(tokens);
+  yt.session.logged_in = true;
   console.log("[stream] OAuth sign-in complete");
 }
 
