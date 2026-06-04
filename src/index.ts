@@ -10,6 +10,7 @@ import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { getYTMusic, resetYTMusic, searchSongsWithRealVideoIds } from "./lib/ytmusic.js";
+import { getStreamUrl } from "./lib/stream.js";
 
 
 
@@ -107,6 +108,31 @@ app.get("/stream-url/:id", async (c) => {
 
 app.get("/cdn/:id", async (c) => {
   return c.json({ error: "CDN endpoint deprecated - client uses YT IFrame API" }, 410);
+});
+
+app.get("/api/stream/:videoId", async (c) => {
+  const videoId = c.req.param("videoId");
+  if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
+
+  const upstreamUrl = await getStreamUrl(videoId);
+  if (!upstreamUrl) return c.json({ error: "Failed to get stream URL" }, 502);
+
+  try {
+    const resp = await fetch(upstreamUrl);
+    if (!resp.ok || !resp.body) {
+      console.error(`[stream] upstream ${resp.status} for ${videoId}`);
+      return c.json({ error: "Upstream fetch failed" }, 502);
+    }
+
+    const contentType = resp.headers.get("content-type") || "audio/mp4";
+    c.header("Content-Type", contentType);
+    c.header("Cache-Control", "public, max-age=3600");
+    c.header("Access-Control-Allow-Origin", "*");
+    return c.body(resp.body as any);
+  } catch (err: any) {
+    console.error(`[stream] proxy error for ${videoId}:`, err.message);
+    return c.json({ error: "Stream error" }, 502);
+  }
 });
 
 app.get("/debug", async (c) => {
