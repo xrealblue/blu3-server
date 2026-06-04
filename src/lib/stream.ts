@@ -1,23 +1,11 @@
+import { Innertube } from "youtubei.js";
 import { existsSync, mkdirSync, createReadStream, createWriteStream, renameSync, unlinkSync } from "fs";
 import { resolve } from "path";
-import { buildAuthHeaders, initAuth, resetAuth } from "./youtubeAuth.js";
-
-const YT_API_URL = "https://www.youtube.com/youtubei/v1/player";
-const API_KEYS = [
-  process.env.YOUTUBE_API_KEY,
-  "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
-  "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
-].filter(Boolean) as string[];
 
 const CACHE_DIR = resolve(process.env.CDN_CACHE_DIR || "cache");
 if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
 
 const downloadsInProgress = new Map<string, Promise<string>>();
-
-const CLIENT_CONTEXTS = [
-  { clientName: "ANDROID", clientVersion: "19.09.37" },
-  { clientName: "ANDROID_MUSIC", clientVersion: "6.38.54" },
-];
 
 function extFromMime(mime: string): string {
   const m = mime.toLowerCase();
@@ -27,90 +15,46 @@ function extFromMime(mime: string): string {
   return "m4a";
 }
 
-function findAudioFormat(formats: any[]): { url: string; mimeType: string } | null {
-  for (const f of [...(formats || [])]) {
-    const mime = (f.mimeType || "").toLowerCase();
-    if (mime.includes("audio") && f.url && !f.hasVideo) {
-      return { url: f.url, mimeType: f.mimeType.split(";")[0].trim() };
-    }
-  }
-  return null;
+let innertubeInstance: Innertube | null = null;
+
+async function getInnertube(): Promise<Innertube> {
+  if (innertubeInstance) return innertubeInstance;
+  const cookie = process.env.YT_COOKIES || "";
+  innertubeInstance = await Innertube.create({
+    cookie,
+  });
+  return innertubeInstance;
+}
+
+export function resetInnertube(): void {
+  innertubeInstance = null;
 }
 
 async function fetchStreamUrl(videoId: string): Promise<{ url: string; mimeType: string } | null> {
-  let auth;
   try {
-    auth = await initAuth();
-  } catch {
-    console.error("[stream] No YT_COOKIES set, streaming unavailable");
+    const yt = await getInnertube();
+    const info = await yt.getInfo(videoId);
+
+    const formats = info.chooseFormat({ type: "audio", quality: "best" });
+    if (!formats) {
+      console.log(`[stream] no audio format for ${videoId}`);
+      return null;
+    }
+
+    const format = Array.isArray(formats) ? formats[0] : formats;
+    const url = format?.decipher(yt.session.player) || "";
+    if (!url) {
+      console.log(`[stream] no deciphered URL for ${videoId}`);
+      return null;
+    }
+
+    const mimeType = format.mime_type?.split(";")[0]?.trim() || "audio/mp4";
+    console.log(`[stream] got stream for ${videoId} (${mimeType})`);
+    return { url, mimeType };
+  } catch (err: any) {
+    console.error(`[stream] error for ${videoId}:`, err.message);
     return null;
   }
-
-  const baseHeaders = buildAuthHeaders(parseCookies(auth.cookieString));
-
-  for (const ctx of CLIENT_CONTEXTS) {
-    for (const apiKey of API_KEYS) {
-      const body: any = {
-        videoId,
-        context: {
-          client: {
-            clientName: ctx.clientName,
-            clientVersion: ctx.clientVersion,
-            androidSdkVersion: 30,
-          },
-        },
-      };
-
-      if (auth.visitorData) {
-        body.context.client.visitorData = auth.visitorData;
-      }
-
-      try {
-        const resp = await fetch(`${YT_API_URL}?key=${apiKey}`, {
-          method: "POST",
-          body: JSON.stringify(body),
-          headers: baseHeaders,
-        });
-
-        if (!resp.ok) {
-          const text = await resp.text();
-          console.log(`[stream] ${ctx.clientName} (key ${apiKey.slice(0, 8)}...) → ${resp.status} ${text.slice(0, 200)}`);
-          continue;
-        }
-
-        const data: any = await resp.json();
-        if (!data.streamingData) {
-          console.log(`[stream] ${ctx.clientName} → no streamingData in response`);
-          continue;
-        }
-
-        const fmt = findAudioFormat(data.streamingData.adaptiveFormats)
-          || findAudioFormat(data.streamingData.formats);
-
-        if (!fmt) {
-          console.log(`[stream] ${ctx.clientName} → no audio format found`);
-          continue;
-        }
-
-        console.log(`[stream] ${ctx.clientName} → got stream for ${videoId}`);
-        return fmt;
-      } catch (err: any) {
-        console.log(`[stream] ${ctx.clientName} → error: ${err.message}`);
-      }
-    }
-  }
-
-  return null;
-}
-
-function parseCookies(cookieString: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const part of cookieString.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    result[part.substring(0, eq).trim()] = part.substring(eq + 1).trim();
-  }
-  return result;
 }
 
 function cachePath(videoId: string, ext: string): string {
