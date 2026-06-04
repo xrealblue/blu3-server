@@ -2,8 +2,6 @@ import { Innertube, ClientType } from "youtubei.js";
 
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
 
-const ANDROID_API_KEY = "AIzaSyA8eiZmM1G6r9z-4U6B4M4h9Q9v_1X8X3c";
-
 let ytInstance: Innertube | null = null;
 let sessionCreatedAt = 0;
 let sessionPromise: Promise<Innertube> | null = null;
@@ -29,14 +27,13 @@ async function signIn(yt: Innertube) {
 }
 
 async function createSession(): Promise<Innertube> {
-  console.log("[stream] Creating ANDROID session...");
+  console.log("[stream] Creating TVHTML5 session...");
   const yt = await Innertube.create({
-    client_type: ClientType.ANDROID,
+    client_type: ClientType.TV,
     generate_session_locally: true,
     retrieve_player: false,
     ...(process.env.YT_COOKIES ? { cookie: process.env.YT_COOKIES } : {}),
   });
-  yt.session.api_key = ANDROID_API_KEY;
 
   if (process.env.YT_OAUTH_REFRESH_TOKEN) {
     try {
