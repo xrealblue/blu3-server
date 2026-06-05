@@ -272,7 +272,7 @@ export async function handleWS(ws: any, url: URL) {
           if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
           if (!msg.videoId) return;
 
-          const seekTo = Math.max(0, Number(msg.currentTime ?? 0));
+          const seekTo = clampTime(msg.currentTime);
           const currentTl = await getPlayback(roomCode);
 
           if (currentTl?.videoId && currentTl.videoId !== msg.videoId) {
