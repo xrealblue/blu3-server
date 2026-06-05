@@ -17,7 +17,7 @@ import { resolveJioSaavn } from "./lib/jiosaavnAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
 
 const audioCache = new Map<string, { cdnUrl: string; fetchedAt: number }>();
-const CACHE_TTL = 30 * 60 * 1000;
+const CACHE_TTL = 24 * 60 * 60 * 1000;
 
 setInterval(() => {
   const cutoff = Date.now() - CACHE_TTL;
@@ -179,7 +179,8 @@ app.get("/api/audio/:videoId", async (c) => {
   try {
     const cdnRes = await fetch(cached.cdnUrl, {
       headers: {
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://www.jiosaavn.com/",
         "Range": c.req.header("Range") ?? "",
       },
     });
