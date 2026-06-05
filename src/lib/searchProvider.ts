@@ -3,6 +3,7 @@ import { getYTMusic, searchSongsWithRealVideoIds } from "./ytmusic.js";
 
 export interface SearchTrack {
   id: string;
+  source: string;
   videoId: string;
   name: string;
   duration_ms: number;
@@ -42,6 +43,7 @@ export class YtMusicSearchProvider implements SearchProvider {
         const image = thumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj");
         return {
           id: r.videoId,
+          source: "youtube",
           videoId: r.videoId,
           name: r.name,
           duration_ms: (r.duration ?? 0) * 1000,

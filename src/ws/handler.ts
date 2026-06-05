@@ -272,6 +272,7 @@ export async function handleWS(ws: any, url: URL) {
 
               pushRecentTrack(roomCode, {
                 videoId: currentTl.videoId,
+                source: currentTl.source ?? "youtube",
                 trackName: currentTl.trackName ?? "",
                 artistName: currentTl.artistName ?? "",
                 image: currentTl.image ?? "",
@@ -393,6 +394,7 @@ export async function handleWS(ws: any, url: URL) {
 
           pushRecentTrack(roomCode, {
             videoId: currentPlayback.videoId,
+            source: currentPlayback.source ?? "youtube",
             trackName: currentPlayback.trackName ?? "",
             artistName: currentPlayback.artistName ?? "",
             image: currentPlayback.image ?? "",
