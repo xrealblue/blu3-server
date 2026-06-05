@@ -214,12 +214,20 @@ export async function handleWS(ws: any, url: URL) {
     type: "room:joined",
     roomCode,
     isHost: room.hostId === payload.sub,
+    isHostActive: isHostInRoom(roomCode),
     members,
     playback,
     playbackMode: playMode,
     recentTracks: recent,
     queue: q,
   }));
+
+  if (room.hostId === payload.sub) {
+    broadcast(roomCode, {
+      type: "host:active_changed",
+      isHostActive: true,
+    });
+  }
 
   broadcast(roomCode, {
     type: "room:member_joined",
@@ -466,6 +474,7 @@ export async function handleWS(ws: any, url: URL) {
 
     async onClose() {
       try {
+        const wasHost = room.hostId === payload.sub;
         removeClient(socketId, roomCode);
         const timer = syncDebounceTimers.get(dbRoom.id);
         if (timer) {
@@ -478,6 +487,12 @@ export async function handleWS(ws: any, url: URL) {
           members: await getRoomMembers(roomCode),
           userId: payload.sub,
         });
+        if (wasHost) {
+          broadcast(roomCode, {
+            type: "host:active_changed",
+            isHostActive: false,
+          });
+        }
       } catch (err) {
         console.error("[WS] onClose error:", err);
       }

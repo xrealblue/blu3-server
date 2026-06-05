@@ -134,6 +134,12 @@ auth.get("/me", async (c) => {
       process.env.JWT_SECRET!,
       "HS256",
     );
+    const [user] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.id, payload.sub as string))
+      .limit(1);
+    if (!user) return c.json({ error: "User not found" }, 401);
     return c.json({ user: payload });
   } catch (err) {
     console.error("JWT verify error:", err);
