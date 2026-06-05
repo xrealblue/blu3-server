@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { rooms, roomMembers, users, roomTrackHistory } from "../db/schema.js";
 import { eq, and, desc } from "drizzle-orm";
 import { customAlphabet } from "nanoid";
-import { auth } from "../lib/auth.js";
+import { getSessionFromRequest } from "../lib/auth.js";
 
 type RoomsEnv = {
   Variables: {
@@ -14,7 +14,7 @@ type RoomsEnv = {
 const roomsRoute = new Hono<RoomsEnv>();
 
 const requireAuth: MiddlewareHandler<RoomsEnv> = async (c, next) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  const session = await getSessionFromRequest(c.req.raw.headers);
   if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
   c.set("userId", session.user.id);
   await next();

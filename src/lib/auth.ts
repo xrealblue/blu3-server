@@ -3,6 +3,7 @@ import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { dash } from "@better-auth/infra";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
+import { eq } from "drizzle-orm";
 
 export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL!,
@@ -33,3 +34,28 @@ export const auth = betterAuth({
     updateAge: 60 * 60 * 24,
   },
 });
+
+export async function getSessionFromRequest(headers: Headers) {
+  const session = await auth.api.getSession({ headers });
+  if (session) return session;
+
+  const authHeader = headers.get("Authorization");
+  if (authHeader?.startsWith("Bearer ")) {
+    const token = authHeader.slice(7);
+    const [s] = await db
+      .select()
+      .from(schema.sessions)
+      .where(eq(schema.sessions.token, token))
+      .limit(1);
+    if (s && s.expiresAt > new Date()) {
+      const [user] = await db
+        .select()
+        .from(schema.users)
+        .where(eq(schema.users.id, s.userId))
+        .limit(1);
+      if (user) return { user, session: s };
+    }
+  }
+
+  return null;
+}

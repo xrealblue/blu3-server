@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { playlists, playlistTracks } from "../db/schema.js";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { searchJioSaavnResults } from "../lib/jiosaavnAudio.js";
-import { auth } from "../lib/auth.js";
+import { getSessionFromRequest } from "../lib/auth.js";
 
 type PlaylistsEnv = {
   Variables: {
@@ -14,7 +14,7 @@ type PlaylistsEnv = {
 const playlistsRoute = new Hono<PlaylistsEnv>();
 
 const requireAuth: MiddlewareHandler<PlaylistsEnv> = async (c, next) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  const session = await getSessionFromRequest(c.req.raw.headers);
   if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
   c.set("userId", session.user.id);
   await next();

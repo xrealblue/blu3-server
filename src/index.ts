@@ -6,7 +6,7 @@ import { existsSync } from "fs";
 dotenv.config();
 if (existsSync(".env.private")) dotenv.config({ path: ".env.private" });
 import { WebSocketServer } from "ws";
-import { auth } from "./lib/auth.js";
+import { auth, getSessionFromRequest } from "./lib/auth.js";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
@@ -24,7 +24,7 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 async function verifyAuth(c: any) {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  const session = await getSessionFromRequest(c.req.raw.headers);
   return session?.user || null;
 }
 
