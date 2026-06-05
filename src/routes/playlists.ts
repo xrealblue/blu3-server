@@ -322,6 +322,68 @@ async function getJioSaavnPlaylistTracks(url: string): Promise<{ name: string; t
   }
 }
 
+// ── YouTube Playlist Import (scrapes ytInitialData, no API key needed) ──
+
+interface YouTubePlaylistTrack {
+  title: string;
+  artist: string;
+}
+
+async function getYouTubePlaylistTracks(url: string): Promise<{ name: string; tracks: YouTubePlaylistTrack[] } | null> {
+  try {
+    const ytRegex = /[&?]list=([a-zA-Z0-9_-]+)/;
+    const match = url.match(ytRegex);
+    const playlistId = match ? match[1] : null;
+    if (!playlistId) return null;
+
+    const res = await fetch(`https://www.youtube.com/playlist?list=${playlistId}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    const matchData = html.match(/ytInitialData\s*=\s*({.+?});\s*<\/script>/s);
+    if (!matchData) return null;
+    const data = JSON.parse(matchData[1]);
+
+    const tabs = data?.contents?.twoColumnBrowseResultsRenderer?.tabs ?? [];
+    const tabContent = tabs[0]?.tabRenderer?.content ?? {};
+    const sectionList = tabContent.sectionListRenderer?.contents ?? [];
+    const itemSection = sectionList[0]?.itemSectionRenderer?.contents ?? [];
+    const playlistRenderer = itemSection[0]?.playlistVideoListRenderer?.contents ?? [];
+
+    const playlistTitle =
+      data?.metadata?.playlistMetadataRenderer?.title ||
+      data?.header?.playlistHeaderRenderer?.title?.simpleText ||
+      "Imported YouTube Playlist";
+
+    const tracks: YouTubePlaylistTrack[] = [];
+
+    for (const item of playlistRenderer) {
+      const video = item?.playlistVideoRenderer ?? {};
+      const titleRun = video?.title?.runs?.[0];
+      const title = titleRun?.text ?? "";
+      if (!title) continue;
+
+      const shortByline = video?.shortBylineText?.runs ?? [];
+      const channelName = shortByline.map((r: any) => r.text).join("") || "Unknown Artist";
+      const artistName = channelName.replace(/ - Topic$/, "").trim();
+
+      tracks.push({ title, artist: artistName || "Unknown Artist" });
+    }
+
+    if (tracks.length === 0) return null;
+    return { name: playlistTitle, tracks };
+  } catch (err) {
+    console.error("YouTube playlist fetch failed:", err);
+    return null;
+  }
+}
+
 // ── ENDPOINTS ──
 
 // GET /api/playlists — Fetch all playlists for current user (Self-Healing "Liked Songs")
@@ -546,22 +608,73 @@ playlistsRoute.post("/liked/toggle", async (c) => {
   }
 });
 
-// POST /api/playlists/import — Import a Spotify, JioSaavn, or Apple Music playlist link
+// POST /api/playlists/import — Import a YouTube, Spotify, JioSaavn, or Apple Music playlist, resolving all to JioSaavn songs
 playlistsRoute.post("/import", async (c) => {
   const userId = c.get("userId");
   const { url } = await c.req.json();
   if (!url?.trim()) return c.json({ error: "Playlist link is required" }, 400);
 
+  const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
   const isSpotify = url.includes("spotify.com");
   const isJioSaavn = url.includes("jiosaavn.com");
   const isAppleMusic = url.includes("music.apple.com");
 
-  if (!isSpotify && !isJioSaavn && !isAppleMusic) {
-    return c.json({ error: "Invalid playlist URL. Please provide a Spotify, JioSaavn, or Apple Music link." }, 400);
+  if (!isYouTube && !isSpotify && !isJioSaavn && !isAppleMusic) {
+    return c.json({ error: "Invalid playlist URL. Please provide a YouTube, Spotify, JioSaavn, or Apple Music link." }, 400);
   }
 
   try {
-    if (isJioSaavn) {
+    if (isYouTube) {
+      // ── YouTube Import (scrape → JioSaavn resolve) ──
+      const scraped = await getYouTubePlaylistTracks(url);
+      if (!scraped || scraped.tracks.length === 0) {
+        return c.json({ error: "Failed to fetch YouTube playlist. Ensure the playlist is public." }, 404);
+      }
+
+      const [newPlaylist] = await db
+        .insert(playlists)
+        .values({
+          userId,
+          name: scraped.name,
+          isLiked: false,
+        })
+        .returning();
+
+      const tracksToInsert: any[] = [];
+      const chunks = chunkArray(scraped.tracks, 5);
+      let positionCounter = 0;
+
+      for (const chunk of chunks) {
+        const resolvedList = await Promise.all(
+          chunk.map(async (item: YouTubePlaylistTrack) => {
+            const resolved = await resolveTrackToJioSaavn(item.title, item.artist);
+            if (resolved.videoId) {
+              return {
+                playlistId: newPlaylist.id,
+                videoId: resolved.videoId,
+                trackName: item.title,
+                artistName: item.artist,
+                image: resolved.image,
+                durationMs: resolved.durationMs,
+              };
+            }
+            return null;
+          })
+        );
+
+        for (const item of resolvedList) {
+          if (item) {
+            tracksToInsert.push({ ...item, position: positionCounter++ });
+          }
+        }
+      }
+
+      if (tracksToInsert.length > 0) {
+        await db.insert(playlistTracks).values(tracksToInsert);
+      }
+
+      return c.json({ playlist: newPlaylist, trackCount: tracksToInsert.length });
+    } else if (isJioSaavn) {
       // ── JioSaavn Import ──
       const scraped = await getJioSaavnPlaylistTracks(url);
       if (!scraped || scraped.tracks.length === 0) {
