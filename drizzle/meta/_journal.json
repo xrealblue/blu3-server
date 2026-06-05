@@ -36,6 +36,13 @@
       "when": 1780695100000,
       "tag": "0004_create_ba_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1781337600000,
+      "tag": "0005_migrate_uuid_to_text",
+      "breakpoints": true
     }
   ]
 }

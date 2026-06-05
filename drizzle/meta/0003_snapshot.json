@@ -10,14 +10,14 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": true,
           "notNull": true,
           "default": "gen_random_uuid()"
         },
         "playlist_id": {
           "name": "playlist_id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -127,14 +127,14 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": true,
           "notNull": true,
           "default": "gen_random_uuid()"
         },
         "user_id": {
           "name": "user_id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -187,20 +187,20 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": true,
           "notNull": true,
           "default": "gen_random_uuid()"
         },
         "room_id": {
           "name": "room_id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
         "user_id": {
           "name": "user_id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -253,14 +253,14 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": true,
           "notNull": true,
           "default": "gen_random_uuid()"
         },
         "room_id": {
           "name": "room_id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -370,14 +370,14 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": true,
           "notNull": true,
           "default": "gen_random_uuid()"
         },
         "room_id": {
           "name": "room_id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -473,7 +473,7 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": true,
           "notNull": true,
           "default": "gen_random_uuid()"
@@ -492,7 +492,7 @@
         },
         "host_id": {
           "name": "host_id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -553,7 +553,7 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": true,
           "notNull": true,
           "default": "gen_random_uuid()"
