@@ -109,8 +109,26 @@ app.get("/stream-url/:id", async (c) => {
   return c.json({ error: "Stream URL endpoint deprecated - client uses YT IFrame API" }, 410);
 });
 
-app.get("/cdn/:id", async (c) => {
-  return c.json({ error: "CDN endpoint deprecated - client uses YT IFrame API" }, 410);
+app.get("/cdn/:videoId", async (c) => {
+  const videoId = c.req.param("videoId");
+  if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
+
+  const url = await getAudioUrl(videoId);
+  if (!url) return c.json({ error: "Failed to get audio URL" }, 502);
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return c.json({ error: "CDN fetch failed" }, 502);
+
+    c.header("Content-Type", response.headers.get("Content-Type") || "audio/mp4");
+    c.header("Accept-Ranges", "bytes");
+    c.status(200);
+
+    return c.body(response.body);
+  } catch (err) {
+    console.error(`[cdn] proxy error for ${videoId}:`, err);
+    return c.json({ error: "Stream error" }, 502);
+  }
 });
 
 app.get("/api/ytdl/:videoId", async (c) => {
