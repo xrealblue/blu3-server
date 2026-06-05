@@ -77,7 +77,7 @@ export const rooms = pgTable("rooms", {
 });
 
 export const roomMembers = pgTable("room_members", {
-  id: text("id").primaryKey(),
+  id: text("id").primaryKey().default(sql`gen_random_uuid()`),
   roomId: text("room_id")
     .notNull()
     .references(() => rooms.id, { onDelete: "cascade" }),
@@ -92,7 +92,7 @@ export const roomMembers = pgTable("room_members", {
 export const roomTrackHistory = pgTable(
   "room_track_history",
   {
-    id: text("id").primaryKey(),
+    id: text("id").primaryKey().default(sql`gen_random_uuid()`),
     roomId: text("room_id")
       .notNull()
       .references(() => rooms.id, { onDelete: "cascade" }),
