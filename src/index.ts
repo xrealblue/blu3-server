@@ -11,18 +11,14 @@ import authRoute from "./routes/auth.js";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
-import { getYTMusic, resetYTMusic, searchSongsWithRealVideoIds } from "./lib/ytmusic.js";
-import { getStreamInfo } from "./lib/stream.js";
-import { getAudioUrl } from "./lib/ytdl.js";
-
-
+import { YtMusicSearchProvider } from "./lib/searchProvider.js";
+import { YtDlpResolver } from "./lib/audioResolver.js";
+import { checkRateLimit } from "./lib/ratelimit.js";
 
 const getCorsOrigins = (): string[] => {
   const defaultOrigins = ["http://localhost:3000", "https://blu3.in"];
   const originsEnv = process.env.CORS_ORIGINS;
-  if (!originsEnv) {
-    return defaultOrigins;
-  }
+  if (!originsEnv) return defaultOrigins;
   const parsed = originsEnv
     .split(",")
     .map((origin) => origin.trim())
@@ -37,14 +33,33 @@ app.use(
   "*",
   cors({
     origin: getCorsOrigins(),
-    allowMethods: ["GET", "POST", "DELETE", "OPTIONS", "PUT"], // Added PUT/PATCH if needed
+    allowMethods: ["GET", "POST", "DELETE", "OPTIONS", "PUT"],
     allowHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   }),
 );
 
 app.get("/", (c) => c.json({ status: "ok", service: "blu3-api" }));
-app.get("/health", (c) => c.json({ status: "ok" }));
+app.get("/healthz", (c) => c.json({ status: "ok" }));
+app.get("/readyz", async (c) => {
+  const issues: string[] = [];
+  try {
+    const { db } = await import("./db/index.js");
+    await db.execute("SELECT 1");
+  } catch {
+    issues.push("db");
+  }
+  try {
+    const { getRedis } = await import("./lib/redis.js");
+    const r = getRedis();
+    if (r) await r.ping();
+  } catch {
+    issues.push("redis");
+  }
+  if (issues.length > 0) return c.json({ status: "degraded", issues }, 503);
+  return c.json({ status: "ok" });
+});
+
 app.route("/auth", authRoute);
 app.route("/api/rooms", roomsRoute);
 app.route("/api/playlists", playlistsRoute);
@@ -53,7 +68,6 @@ app.get(
   "/ws",
   upgradeWebSocket((c) => {
     let handlers: Awaited<ReturnType<typeof handleWS>> = null;
-
     return {
       async onOpen(_, ws) {
         const url = new URL(c.req.url);
@@ -72,88 +86,47 @@ app.get(
   }),
 );
 
+const searchProvider = new YtMusicSearchProvider();
+const audioResolver = new YtDlpResolver();
+
 app.get("/api/search", async (c) => {
   const q = c.req.query("q");
   if (!q?.trim()) return c.json({ tracks: [] });
+
+  const ip = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? "unknown";
+  const rl = await checkRateLimit(`search:${ip}`, 30);
+  if (!rl.success) {
+    return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
+  }
+
   try {
-    const yt = await getYTMusic();
-    const results = await searchSongsWithRealVideoIds(q);
-
-    const tracks = results.map((r) => {
-      const thumbs = r.thumbnails ?? [];
-      const thumb = thumbs[thumbs.length - 1]?.url ?? "";
-      const image = thumb.replace(/=w\d+-h\d+.*$/, "=w226-h226-l90-rj");
-      return {
-        id: r.videoId,
-        videoId: r.videoId,
-        name: r.name,
-        duration_ms: (r.duration ?? 0) * 1000,
-        explicit: false,
-        artists: r.artist ? [{ name: r.artist.name }] : [],
-        album: { name: r.album?.name ?? "" },
-        image,
-      };
-    });
-
-    return c.json({ tracks });
+    const result = await searchProvider.search(q);
+    return c.json(result);
   } catch (err) {
     console.error("Search error:", err);
-    resetYTMusic();
     return c.json({ error: "Search failed" }, 500);
   }
 });
 
-app.get("/stream-url/:id", async (c) => {
-  const videoId = c.req.param("id");
-  if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
-  return c.json({ error: "Stream URL endpoint deprecated - client uses YT IFrame API" }, 410);
-});
-
-app.get("/cdn/:videoId", async (c) => {
+app.get("/api/resolve/:videoId", async (c) => {
   const videoId = c.req.param("videoId");
   if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
 
-  const url = await getAudioUrl(videoId);
-  if (!url) return c.json({ error: "Failed to get audio URL" }, 502);
+  const ip = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? "unknown";
+  const rl = await checkRateLimit(`resolve:${ip}`, 60);
+  if (!rl.success) {
+    return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
+  }
 
   try {
-    const response = await fetch(url);
-    if (!response.ok) return c.json({ error: "CDN fetch failed" }, 502);
-
-    c.header("Content-Type", response.headers.get("Content-Type") || "audio/mp4");
-    c.header("Accept-Ranges", "bytes");
-    c.status(200);
-
-    return c.body(response.body);
+    const result = await audioResolver.resolve(videoId);
+    if (!result) return c.json({ error: "Failed to resolve audio" }, 502);
+    return c.json(result);
   } catch (err) {
-    console.error(`[cdn] proxy error for ${videoId}:`, err);
-    return c.json({ error: "Stream error" }, 502);
+    console.error(`[Resolve] error for ${videoId}:`, err);
+    return c.json({ error: "Resolution failed" }, 500);
   }
 });
-
-app.get("/api/ytdl/:videoId", async (c) => {
-  const videoId = c.req.param("videoId");
-  if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
-
-  const url = await getAudioUrl(videoId);
-  if (!url) return c.json({ error: "Failed to get audio URL" }, 502);
-
-  return c.json({ url, videoId });
-});
-
-app.get("/debug", async (c) => {
-  const { existsSync } = await import("fs");
-  const { resolve } = await import("path");
-  const cacheDir = resolve(process.env.CDN_CACHE_DIR || "cache");
-  const files = existsSync(cacheDir) ? (await import("fs")).readdirSync(cacheDir) : [];
-  return c.json({
-    status: "ok",
-    uptime: process.uptime(),
-    cachedFiles: files.filter((f) => !f.includes(".downloading")).length,
-    cacheDir,
-  });
-});
-
 
 app.get("/api/suggest", async (c) => {
   const q = c.req.query("q");
@@ -166,9 +139,7 @@ app.get("/api/suggest", async (c) => {
     const match = text.match(/\[.*\]/s);
     if (!match) return c.json({ suggestions: [] });
     const parsed = JSON.parse(match[0]);
-    const suggestions: string[] = (parsed[1] ?? []).map((s: unknown[]) =>
-      String(s[0]),
-    );
+    const suggestions: string[] = (parsed[1] ?? []).map((s: unknown[]) => String(s[0]));
     return c.json({ suggestions: suggestions.slice(0, 8) });
   } catch {
     return c.json({ suggestions: [] });
@@ -177,16 +148,17 @@ app.get("/api/suggest", async (c) => {
 
 const port = Number(process.env.PORT ?? 8000);
 
-// ← KEY: create wss with noServer:true, pass via websocket option
 const wss = new WebSocketServer({ noServer: true });
 
 serve(
   {
     fetch: app.fetch,
     port,
-    websocket: { server: wss }, // ← attach here
+    websocket: { server: wss },
   },
   (info) => {
     console.log(`blu3 API running on http://localhost:${info.port}`);
+    console.log(`Health: http://localhost:${info.port}/healthz`);
+    console.log(`Ready:  http://localhost:${info.port}/readyz`);
   },
 );
