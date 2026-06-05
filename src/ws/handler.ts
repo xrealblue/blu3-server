@@ -1,4 +1,4 @@
-import { verify } from "hono/jwt";
+import { auth } from "../lib/auth.js";
 import {
   getOrCreateRoom,
   addClient,
@@ -119,19 +119,7 @@ function scheduleQueueSync(roomId: string, roomCode: string) {
   }, 10_000));
 }
 
-const jwtCache = new Map<string, { payload: any; expiresAt: number }>();
-
-function getCachedJwt(token: string): any | null {
-  const cached = jwtCache.get(token);
-  if (cached && cached.expiresAt > Date.now()) return cached.payload;
-  jwtCache.delete(token);
-  return null;
-}
-
-function setCachedJwt(token: string, payload: any) {
-  const exp = (payload.exp ?? (Date.now() / 1000 + 3600)) * 1000;
-  jwtCache.set(token, { payload, expiresAt: exp - 60_000 });
-}
+const sessionCache = new Map<string, { user: any; expiresAt: number }>();
 
 export async function handleWS(ws: any, url: URL) {
   const token = url.searchParams.get("token");
@@ -143,11 +131,18 @@ export async function handleWS(ws: any, url: URL) {
     return null;
   }
 
-  let payload: any = getCachedJwt(token);
-  if (!payload) {
+  let user: any = null;
+  const cached = sessionCache.get(token);
+  if (cached && cached.expiresAt > Date.now()) {
+    user = cached.user;
+  } else {
     try {
-      payload = await verify(token, process.env.JWT_SECRET!, "HS256");
-      setCachedJwt(token, payload);
+      const session = await auth.api.getSession({
+        headers: new Headers({ Authorization: `Bearer ${token}` }),
+      });
+      if (!session?.user) throw new Error("No session");
+      user = session.user;
+      sessionCache.set(token, { user, expiresAt: Date.now() + 5 * 60 * 1000 });
     } catch (err) {
       console.error("WS auth error:", err);
       ws.send(JSON.stringify({ type: "error", message: "Invalid token" }));
@@ -159,9 +154,9 @@ export async function handleWS(ws: any, url: URL) {
   const socketId = nanoid();
   const client: WSClient = {
     id: socketId,
-    userId: payload.sub,
-    name: payload.name,
-    avatar: payload.avatar,
+    userId: user.id,
+    name: user.name,
+    avatar: user.image,
     roomCode,
     ws,
   };
@@ -219,7 +214,7 @@ export async function handleWS(ws: any, url: URL) {
   ws.send(JSON.stringify({
     type: "room:joined",
     roomCode,
-    isHost: room.hostId === payload.sub,
+    isHost: room.hostId === user.id,
     isHostActive: isHostInRoom(roomCode),
     members,
     playback,
@@ -228,7 +223,7 @@ export async function handleWS(ws: any, url: URL) {
     queue: q,
   }));
 
-  if (room.hostId === payload.sub) {
+  if (room.hostId === user.id) {
     broadcast(roomCode, {
       type: "host:active_changed",
       isHostActive: true,
@@ -238,7 +233,7 @@ export async function handleWS(ws: any, url: URL) {
   broadcast(roomCode, {
     type: "room:member_joined",
     members: await getRoomMembers(roomCode),
-    user: { userId: payload.sub, name: payload.name, avatar: payload.avatar },
+    user: { userId: user.id, name: user.name, avatar: user.image },
   }, socketId);
 
   return {
@@ -251,7 +246,7 @@ export async function handleWS(ws: any, url: URL) {
         return;
       }
 
-      console.log(`[WS] ${payload.name}: ${msg.type}`, JSON.stringify(msg).slice(0, 200));
+      console.log(`[WS] ${user.name}: ${msg.type}`, JSON.stringify(msg).slice(0, 200));
 
       const serverNow = Date.now();
 
@@ -259,9 +254,9 @@ export async function handleWS(ws: any, url: URL) {
         case "chat:send": {
           const chatMsg: ChatMessage = {
             id: nanoid(),
-            userId: payload.sub,
-            name: payload.name,
-            avatar: payload.avatar,
+            userId: user.id,
+            name: user.name,
+            avatar: user.image,
             text: String(msg.text).slice(0, 500),
             ts: serverNow,
           };
@@ -269,7 +264,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "playback:play": {
-          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
+          if (!canControlPlayback(roomCode, room.hostId, user.id)) return;
           if (!msg.videoId) return;
 
           const seekTo = clampTime(msg.currentTime);
@@ -334,7 +329,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "playback:pause": {
-          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
+          if (!canControlPlayback(roomCode, room.hostId, user.id)) return;
 
           const currentTl = await getPlayback(roomCode);
           const pauseSnapshot = createPauseSnapshot(
@@ -365,7 +360,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "playback:seek": {
-          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
+          if (!canControlPlayback(roomCode, room.hostId, user.id)) return;
 
           const seekTo = clampTime(msg.currentTime);
 
@@ -383,7 +378,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "playback:ended": {
-          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
+          if (!canControlPlayback(roomCode, room.hostId, user.id)) return;
           const currentPlayback = await getPlayback(roomCode);
           if (!currentPlayback?.videoId) return;
 
@@ -422,7 +417,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "playback:mode": {
-          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
+          if (!canControlPlayback(roomCode, room.hostId, user.id)) return;
           const mode = await getPlaybackMode(roomCode);
           const next = {
             ...mode,
@@ -463,7 +458,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "queue:cycle_current": {
-          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
+          if (!canControlPlayback(roomCode, room.hostId, user.id)) return;
           await moveQueueTrackToEnd(roomCode, msg.trackId);
           broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
           scheduleQueueSync(dbRoom.id, roomCode);
@@ -480,7 +475,7 @@ export async function handleWS(ws: any, url: URL) {
 
     async onClose() {
       try {
-        const wasHost = room.hostId === payload.sub;
+        const wasHost = room.hostId === user.id;
         removeClient(socketId, roomCode);
         const timer = syncDebounceTimers.get(dbRoom.id);
         if (timer) {
@@ -491,7 +486,7 @@ export async function handleWS(ws: any, url: URL) {
         broadcast(roomCode, {
           type: "room:member_left",
           members: await getRoomMembers(roomCode),
-          userId: payload.sub,
+          userId: user.id,
         });
         if (wasHost) {
           broadcast(roomCode, {

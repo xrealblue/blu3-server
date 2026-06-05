@@ -2,8 +2,8 @@ import { Hono, type MiddlewareHandler } from "hono";
 import { db } from "../db/index.js";
 import { rooms, roomMembers, users, roomTrackHistory } from "../db/schema.js";
 import { eq, and, desc } from "drizzle-orm";
-import { verify } from "hono/jwt";
 import { customAlphabet } from "nanoid";
+import { auth } from "../lib/auth.js";
 
 type RoomsEnv = {
   Variables: {
@@ -13,31 +13,11 @@ type RoomsEnv = {
 
 const roomsRoute = new Hono<RoomsEnv>();
 
-const jwtCache = new Map<string, { payload: any; expiresAt: number }>();
-
 const requireAuth: MiddlewareHandler<RoomsEnv> = async (c, next) => {
-  const header = c.req.header("Authorization");
-  if (!header?.startsWith("Bearer "))
-    return c.json({ error: "Unauthorized" }, 401);
-  const token = header.slice(7);
-
-  const cached = jwtCache.get(token);
-  if (cached && cached.expiresAt > Date.now()) {
-    c.set("userId", cached.payload.sub as string);
-    await next();
-    return;
-  }
-
-  try {
-    const payload = await verify(token, process.env.JWT_SECRET!, "HS256");
-    const exp = (payload.exp ?? (Date.now() / 1000 + 3600)) * 1000;
-    jwtCache.set(token, { payload, expiresAt: exp - 60_000 });
-    c.set("userId", payload.sub as string);
-    await next();
-  } catch (err) {
-    console.error("Room auth error:", err);
-    return c.json({ error: "Invalid token" }, 401);
-  }
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
+  c.set("userId", session.user.id);
+  await next();
 };
 
 const genCode = customAlphabet("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 6);
@@ -84,7 +64,7 @@ roomsRoute.get("/:code", requireAuth, async (c) => {
   if (!room.isActive) return c.json({ error: "Room is closed" }, 410);
 
   const members = await db
-    .select({ id: users.id, name: users.name, avatar: users.avatar })
+    .select({ id: users.id, name: users.name, avatar: users.image })
     .from(roomMembers)
     .innerJoin(users, eq(roomMembers.userId, users.id))
     .where(eq(roomMembers.roomId, room.id));

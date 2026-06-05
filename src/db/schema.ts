@@ -2,26 +2,73 @@ import {
   pgTable,
   text,
   timestamp,
-  uuid,
   boolean,
   index,
   integer,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
-export const users = pgTable("users", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  googleId: text("google_id").notNull().unique(),
+export const users = pgTable("user", {
+  id: text("id").primaryKey(),
   email: text("email").notNull().unique(),
+  emailVerified: boolean("email_verified").notNull().default(false),
   name: text("name").notNull(),
-  avatar: text("avatar"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+  image: text("image"),
+  createdAt: timestamp("created_at").notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
 });
 
+export const sessions = pgTable("session", {
+  id: text("id").primaryKey(),
+  expiresAt: timestamp("expires_at").notNull(),
+  token: text("token").notNull().unique(),
+  createdAt: timestamp("created_at").notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+});
+
+export const accounts = pgTable(
+  "account",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at"),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at"),
+    scope: text("scope"),
+    password: text("password"),
+    createdAt: timestamp("created_at").notNull(),
+    updatedAt: timestamp("updated_at").notNull(),
+  },
+);
+
+export const verifications = pgTable(
+  "verification",
+  {
+    id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
+    value: text("value").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdAt: timestamp("created_at"),
+    updatedAt: timestamp("updated_at"),
+  },
+);
+
 export const rooms = pgTable("rooms", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  code: text("code").notNull().unique(), // short shareable code e.g. "ABC123"
+  id: text("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").notNull().unique(),
   name: text("name").notNull(),
-  hostId: uuid("host_id")
+  hostId: text("host_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   hostName: text("host_name").notNull(),
@@ -30,11 +77,11 @@ export const rooms = pgTable("rooms", {
 });
 
 export const roomMembers = pgTable("room_members", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  roomId: uuid("room_id")
+  id: text("id").primaryKey(),
+  roomId: text("room_id")
     .notNull()
     .references(() => rooms.id, { onDelete: "cascade" }),
-  userId: uuid("user_id")
+  userId: text("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   joinedAt: timestamp("joined_at").defaultNow().notNull(),
@@ -45,8 +92,8 @@ export const roomMembers = pgTable("room_members", {
 export const roomTrackHistory = pgTable(
   "room_track_history",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    roomId: uuid("room_id")
+    id: text("id").primaryKey(),
+    roomId: text("room_id")
       .notNull()
       .references(() => rooms.id, { onDelete: "cascade" }),
     videoId: text("video_id").notNull(),
@@ -56,16 +103,16 @@ export const roomTrackHistory = pgTable(
     playedAt: timestamp("played_at").defaultNow().notNull(),
   },
   (t) => [
-    index("rth_room_idx").on(t.roomId), // fast lookup per room
-    index("rth_played_at_idx").on(t.playedAt), // fast ORDER BY playedAt DESC
+    index("rth_room_idx").on(t.roomId),
+    index("rth_played_at_idx").on(t.playedAt),
   ],
 );
 
 export const roomQueue = pgTable(
   "room_queue",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    roomId: uuid("room_id")
+    id: text("id").primaryKey(),
+    roomId: text("room_id")
       .notNull()
       .references(() => rooms.id, { onDelete: "cascade" }),
     videoId: text("video_id").notNull(),
@@ -89,8 +136,8 @@ export type RoomMember = typeof roomMembers.$inferSelect;
 export type RoomQueue = typeof roomQueue.$inferSelect;
 
 export const playlists = pgTable("playlists", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id")
+  id: text("id").primaryKey(),
+  userId: text("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
@@ -101,8 +148,8 @@ export const playlists = pgTable("playlists", {
 export const playlistTracks = pgTable(
   "playlist_tracks",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    playlistId: uuid("playlist_id")
+    id: text("id").primaryKey(),
+    playlistId: text("playlist_id")
       .notNull()
       .references(() => playlists.id, { onDelete: "cascade" }),
     videoId: text("video_id").notNull(),

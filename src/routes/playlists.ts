@@ -1,9 +1,9 @@
 import { Hono, type MiddlewareHandler } from "hono";
 import { db } from "../db/index.js";
-import { playlists, playlistTracks, users } from "../db/schema.js";
+import { playlists, playlistTracks } from "../db/schema.js";
 import { eq, and, desc, asc } from "drizzle-orm";
-import { verify } from "hono/jwt";
 import { searchJioSaavnResults } from "../lib/jiosaavnAudio.js";
+import { auth } from "../lib/auth.js";
 
 type PlaylistsEnv = {
   Variables: {
@@ -14,21 +14,10 @@ type PlaylistsEnv = {
 const playlistsRoute = new Hono<PlaylistsEnv>();
 
 const requireAuth: MiddlewareHandler<PlaylistsEnv> = async (c, next) => {
-  const header = c.req.header("Authorization");
-  if (!header?.startsWith("Bearer "))
-    return c.json({ error: "Unauthorized" }, 401);
-  try {
-    const payload = await verify(
-      header.slice(7),
-      process.env.JWT_SECRET!,
-      "HS256"
-    );
-    c.set("userId", payload.sub as string);
-    await next();
-  } catch (err) {
-    console.error("Playlist auth error:", err);
-    return c.json({ error: "Invalid token" }, 401);
-  }
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
+  c.set("userId", session.user.id);
+  await next();
 };
 
 playlistsRoute.use("*", requireAuth);

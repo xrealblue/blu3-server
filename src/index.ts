@@ -2,13 +2,12 @@ import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { verify } from "hono/jwt";
 import * as dotenv from "dotenv";
 import { existsSync } from "fs";
 dotenv.config();
 if (existsSync(".env.private")) dotenv.config({ path: ".env.private" });
 import { WebSocketServer } from "ws";
-import authRoute from "./routes/auth.js";
+import { auth } from "./lib/auth.js";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
@@ -26,13 +25,8 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 async function verifyAuth(c: any) {
-  const auth = c.req.header("Authorization");
-  if (!auth?.startsWith("Bearer ")) return null;
-  try {
-    return await verify(auth.slice(7), process.env.JWT_SECRET!, "HS256");
-  } catch {
-    return null;
-  }
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  return session?.user || null;
 }
 
 const getCorsOrigins = (): string[] => {
@@ -80,7 +74,8 @@ app.get("/readyz", async (c) => {
   return c.json({ status: "ok" });
 });
 
-app.route("/auth", authRoute);
+app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
+
 app.route("/api/rooms", roomsRoute);
 app.route("/api/playlists", playlistsRoute);
 
@@ -164,13 +159,8 @@ app.post("/api/resolve", async (c) => {
 });
 
 app.get("/api/audio/:videoId", async (c) => {
-  const token = c.req.query("token") ?? c.req.header("Authorization")?.slice(7);
-  if (!token) return c.json({ error: "Unauthorized" }, 401);
-  try {
-    await verify(token, process.env.JWT_SECRET!, "HS256");
-  } catch {
-    return c.json({ error: "Invalid token" }, 401);
-  }
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) return c.json({ error: "Unauthorized" }, 401);
 
   const videoId = c.req.param("videoId");
   if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
