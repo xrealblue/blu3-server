@@ -74,7 +74,15 @@ app.get("/readyz", async (c) => {
   return c.json({ status: "ok" });
 });
 
-app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
+app.on(["GET", "POST"], "/api/auth/*", async (c) => {
+  const res = await auth.handler(c.req.raw);
+  const origin = c.req.header("origin");
+  if (origin && getCorsOrigins().includes(origin)) {
+    res.headers.set("Access-Control-Allow-Origin", origin);
+    res.headers.set("Access-Control-Allow-Credentials", "true");
+  }
+  return res;
+});
 
 app.route("/api/rooms", roomsRoute);
 app.route("/api/playlists", playlistsRoute);
