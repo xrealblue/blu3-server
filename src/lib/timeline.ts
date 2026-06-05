@@ -4,24 +4,24 @@ export interface TimelineSnapshot {
   artistName: string;
   image: string;
   isPlaying: boolean;
-  positionMs: number;
+  positionSec: number;
   anchorServerTime: number;
 }
 
 export function currentPosition(timeline: TimelineSnapshot, serverNow: number): number {
-  if (!timeline.isPlaying) return timeline.positionMs;
-  const elapsed = serverNow - timeline.anchorServerTime;
-  return Math.max(0, timeline.positionMs + elapsed);
+  if (!timeline.isPlaying) return timeline.positionSec;
+  const elapsed = (serverNow - timeline.anchorServerTime) / 1000;
+  return Math.max(0, timeline.positionSec + elapsed);
 }
 
 export function snapToServerTime(
   timeline: TimelineSnapshot,
-  clientPositionMs: number,
+  clientPositionSec: number,
   serverNow: number,
 ): TimelineSnapshot {
   return {
     ...timeline,
-    positionMs: clientPositionMs,
+    positionSec: clientPositionSec,
     anchorServerTime: serverNow,
   };
 }
@@ -31,7 +31,7 @@ export function createPlaySnapshot(
   trackName: string,
   artistName: string,
   image: string,
-  seekToMs: number,
+  seekToSec: number,
   serverNow: number,
 ): TimelineSnapshot {
   return {
@@ -40,7 +40,7 @@ export function createPlaySnapshot(
     artistName,
     image,
     isPlaying: true,
-    positionMs: seekToMs,
+    positionSec: seekToSec,
     anchorServerTime: serverNow,
   };
 }
@@ -52,19 +52,19 @@ export function createPauseSnapshot(
   return {
     ...timeline,
     isPlaying: false,
-    positionMs: currentPosition(timeline, serverNow),
+    positionSec: currentPosition(timeline, serverNow),
     anchorServerTime: serverNow,
   };
 }
 
 export function createSeekSnapshot(
   timeline: TimelineSnapshot,
-  seekToMs: number,
+  seekToSec: number,
   serverNow: number,
 ): TimelineSnapshot {
   return {
     ...timeline,
-    positionMs: Math.max(0, seekToMs),
+    positionSec: Math.max(0, seekToSec),
     anchorServerTime: serverNow,
   };
 }

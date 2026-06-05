@@ -7,7 +7,7 @@ export interface TimelineState {
   artistName: string;
   image: string;
   isPlaying: boolean;
-  positionMs: number;
+  positionSec: number;
   anchorServerTime: number;
   shuffle: boolean;
   repeatMode: "off" | "all" | "one";
@@ -40,7 +40,7 @@ export function defaultTimeline(): TimelineState {
     artistName: "",
     image: "",
     isPlaying: false,
-    positionMs: 0,
+    positionSec: 0,
     anchorServerTime: Date.now(),
     shuffle: false,
     repeatMode: "off",
