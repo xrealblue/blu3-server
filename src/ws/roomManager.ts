@@ -1,3 +1,12 @@
+import type { RoomStore, TimelineState, QueueTrack } from "../lib/roomStore.js";
+import { MemoryRoomStore } from "../lib/roomStore.js";
+import type { Broadcaster, BroadcastPayload } from "../lib/broadcaster.js";
+import { LocalBroadcaster } from "../lib/broadcaster.js";
+import { currentPosition } from "../lib/timeline.js";
+
+export type { QueueTrack };
+export type RepeatMode = "off" | "all" | "one";
+
 export interface WSClient {
   id: string;
   userId: string;
@@ -34,248 +43,241 @@ export interface RecentTrack {
   playedAt: number;
 }
 
-export interface QueueTrack {
-  id: string;
-  videoId: string;
-  name: string;
-  artists: { name: string }[];
-  image: string;
-  duration_ms?: number;
-}
-
-export type RepeatMode = "off" | "all" | "one";
-
 export interface PlaybackMode {
   shuffle: boolean;
   repeatMode: RepeatMode;
 }
 
-interface Room {
-  code: string;
-  hostId: string;
-  clients: Map<string, WSClient>;
-  hostConnected: boolean;
-  playback: PlaybackState;
-  playbackMode: PlaybackMode;
-  recentTracks: RecentTrack[];
-  queue: QueueTrack[];
-  isQueueLoaded?: boolean;
-}
+/* ─── RoomManager class ─────────────────────────────── */
 
-const rooms = new Map<string, Room>();
-const roomCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const ROOM_CLEANUP_TTL_MS = 5 * 60 * 1000;
+export class RoomManager {
+  private store: RoomStore;
+  private broadcaster: Broadcaster;
+  private clientMap = new Map<string, { client: WSClient; roomCode: string }>();
+  private recentTracks = new Map<string, RecentTrack[]>();
+  private hostMap = new Map<string, string>();
 
-export function getOrCreateRoom(code: string, hostId: string): Room {
-  if (!rooms.has(code)) {
-    rooms.set(code, {
-      code,
-      hostId,
-      clients: new Map(),
-      hostConnected: false,
-      playback: {
-        videoId: null,
-        trackName: "",
-        artistName: "",
-        image: "",
-        isPlaying: false,
-        currentTime: 0,
-        updatedAt: Date.now(),
-      },
-      playbackMode: {
-        shuffle: false,
-        repeatMode: "off",
-      },
-      recentTracks: [],
-      queue: [],
-      isQueueLoaded: false,
+  constructor(store?: RoomStore, broadcaster?: Broadcaster) {
+    this.store = store ?? new MemoryRoomStore();
+    this.broadcaster = broadcaster ?? new LocalBroadcaster();
+  }
+
+  getStore(): RoomStore { return this.store; }
+  getBroadcaster(): Broadcaster { return this.broadcaster; }
+
+  async initRoom(code: string, hostId: string): Promise<void> {
+    this.hostMap.set(code, hostId);
+  }
+
+  async addClient(client: WSClient): Promise<void> {
+    this.clientMap.set(client.id, { client, roomCode: client.roomCode });
+    this.broadcaster.addSocket(client.id, client.roomCode, (data: string) => {
+      if (client.ws.readyState === 1) {
+        try { client.ws.send(data); } catch {}
+      }
     });
   }
-  return rooms.get(code)!;
-}
 
-export function pushRecentTrack(code: string, track: RecentTrack) {
-  const room = rooms.get(code);
-  if (!room) return;
-  room.recentTracks = [
-    track,
-    ...room.recentTracks.filter((t) => t.videoId !== track.videoId),
-  ].slice(0, 10);
-}
-
-export function getRecentTracks(code: string): RecentTrack[] {
-  return rooms.get(code)?.recentTracks ?? [];
-}
-
-export function getRoom(code: string) {
-  return rooms.get(code) ?? null;
-}
-
-export function addClient(client: WSClient) {
-  const room = rooms.get(client.roomCode);
-  if (room) {
-    // Close and remove any existing connection from the same user
-    for (const [existingSocketId, existing] of room.clients) {
-      if (existing.userId === client.userId) {
-        try { existing.ws.close(); } catch {}
-        room.clients.delete(existingSocketId);
-        break;
-      }
-    }
-    room.clients.set(client.id, client);
-    if (client.userId === room.hostId) {
-      room.hostConnected = true;
-    }
-    const timer = roomCleanupTimers.get(client.roomCode);
-    if (timer) {
-      clearTimeout(timer);
-      roomCleanupTimers.delete(client.roomCode);
+  removeClient(socketId: string, _roomCode: string): void {
+    const entry = this.clientMap.get(socketId);
+    if (entry) {
+      this.broadcaster.removeSocket(socketId, entry.roomCode);
+      this.clientMap.delete(socketId);
     }
   }
+
+  async getTimeline(code: string): Promise<TimelineState> {
+    return this.store.getTimeline(code);
+  }
+
+  async setTimeline(code: string, state: Partial<TimelineState>): Promise<TimelineState> {
+    return this.store.setTimeline(code, state);
+  }
+
+  async getPlayback(code: string): Promise<PlaybackState | null> {
+    const tl = await this.store.getTimeline(code);
+    return {
+      videoId: tl.videoId,
+      trackName: tl.trackName,
+      artistName: tl.artistName,
+      image: tl.image,
+      isPlaying: tl.isPlaying,
+      currentTime: currentPosition(tl, Date.now()),
+      updatedAt: Date.now(),
+    };
+  }
+
+  async getPlaybackMode(code: string): Promise<PlaybackMode> {
+    const tl = await this.store.getTimeline(code);
+    return { shuffle: tl.shuffle, repeatMode: tl.repeatMode };
+  }
+
+  getHostId(code: string): string | undefined {
+    return this.hostMap.get(code);
+  }
+
+  isHostInRoom(code: string): boolean {
+    for (const { client, roomCode } of this.clientMap.values()) {
+      if (roomCode === code && client.userId === this.hostMap.get(code)) return true;
+    }
+    return false;
+  }
+
+  canControlPlayback(code: string, userId: string): boolean {
+    const hostId = this.hostMap.get(code);
+    if (!hostId) return true;
+    return !this.isHostInRoom(code) || hostId === userId;
+  }
+
+  async getMembers(code: string) {
+    return this.store.getMembers(code);
+  }
+
+  async getQueue(code: string): Promise<QueueTrack[]> {
+    return this.store.getQueue(code);
+  }
+
+  async addToQueue(code: string, track: QueueTrack): Promise<void> {
+    await this.store.addToQueue(code, track);
+  }
+
+  async removeFromQueue(code: string, trackId: string): Promise<void> {
+    await this.store.removeFromQueue(code, trackId);
+  }
+
+  async insertQueueTop(code: string, track: QueueTrack): Promise<void> {
+    const q = await this.store.getQueue(code);
+    const filtered = q.filter((t) => t.id !== track.id || t.videoId !== track.videoId);
+    filtered.unshift(track);
+    await this.store.setQueue(code, filtered);
+  }
+
+  async moveQueueTrackToEnd(code: string, trackId: string): Promise<void> {
+    const q = await this.store.getQueue(code);
+    const track = q.find((t) => t.id === trackId);
+    if (!track) return;
+    const filtered = q.filter((t) => t.id !== trackId);
+    filtered.push(track);
+    await this.store.setQueue(code, filtered);
+  }
+
+  async clearQueue(code: string): Promise<void> {
+    await this.store.clearQueue(code);
+  }
+
+  pushRecentTrack(code: string, track: RecentTrack): void {
+    const existing = this.recentTracks.get(code) ?? [];
+    this.recentTracks.set(code, [
+      track,
+      ...existing.filter((t) => t.videoId !== track.videoId),
+    ].slice(0, 10));
+  }
+
+  getRecentTracks(code: string): RecentTrack[] {
+    return this.recentTracks.get(code) ?? [];
+  }
+
+  broadcast(code: string, msg: BroadcastPayload, excludeSocketId?: string): void {
+    this.broadcaster.broadcast(code, msg, excludeSocketId);
+  }
+
+  sendTo(socketId: string, code: string, msg: BroadcastPayload): void {
+    this.broadcaster.sendTo(socketId, code, msg);
+  }
+}
+
+/* ─── Singleton + legacy function exports ───────────── */
+
+const legacyManager = new RoomManager();
+
+export function getOrCreateRoom(code: string, hostId: string) {
+  legacyManager.initRoom(code, hostId);
+  return { code, hostId };
+}
+
+export async function addClient(client: WSClient) {
+  await legacyManager.addClient(client);
 }
 
 export function removeClient(socketId: string, roomCode: string) {
-  const room = rooms.get(roomCode);
-  if (!room) return;
-  const client = room.clients.get(socketId);
-  if (client?.userId === room.hostId) {
-    room.hostConnected = false;
-  }
-  room.clients.delete(socketId);
-
-  if (room.clients.size === 0) {
-    const existing = roomCleanupTimers.get(roomCode);
-    if (existing) clearTimeout(existing);
-    roomCleanupTimers.set(roomCode, setTimeout(() => {
-      rooms.delete(roomCode);
-      roomCleanupTimers.delete(roomCode);
-    }, ROOM_CLEANUP_TTL_MS));
-  }
+  legacyManager.removeClient(socketId, roomCode);
 }
 
-export function getRoomMembers(code: string) {
-  const room = rooms.get(code);
-  if (!room) return [];
-  const seen = new Set<string>();
-  return Array.from(room.clients.values())
-    .filter((c) => {
-      if (seen.has(c.userId)) return false;
-      seen.add(c.userId);
-      return true;
-    })
-    .map((c) => ({
-      userId: c.userId,
-      name: c.name,
-      avatar: c.avatar,
-    }));
-}
-
-export function isHostInRoom(code: string): boolean {
-  return rooms.get(code)?.hostConnected ?? false;
-}
-
-export function setPlayback(
-  code: string,
-  state: Partial<PlaybackState> & { updatedAt?: number },
-) {
-  const room = rooms.get(code);
-  if (!room) return;
-  room.playback = {
-    ...room.playback,
-    ...state,
-    updatedAt: state.updatedAt ?? Date.now(),
-  };
-}
-
-export function getPlayback(code: string): PlaybackState | null {
-  return rooms.get(code)?.playback ?? null;
-}
-
-export function getPlaybackMode(code: string): PlaybackMode {
-  return (
-    rooms.get(code)?.playbackMode ?? {
-      shuffle: false,
-      repeatMode: "off",
-    }
-  );
-}
-
-export function setPlaybackMode(code: string, mode: Partial<PlaybackMode>) {
-  const room = rooms.get(code);
-  if (!room) return;
-  room.playbackMode = {
-    ...room.playbackMode,
-    ...mode,
-  };
-}
-
-const WS_OPEN = 1;
-
-export function broadcast(code: string, msg: object, excludeId?: string) {
-  const room = rooms.get(code);
-  if (!room) return;
-  const data = JSON.stringify(msg);
-  room.clients.forEach((client) => {
-    if (client.id === excludeId) return;
-    if (client.ws.readyState !== WS_OPEN) return;
-    try {
-      client.ws.send(data);
-    } catch (err) {
-      console.error("Broadcast error:", err);
-    }
-  });
+export function broadcast(code: string, msg: object, excludeSocketId?: string) {
+  legacyManager.broadcast(code, msg as BroadcastPayload, excludeSocketId);
 }
 
 export function sendTo(socketId: string, roomCode: string, msg: object) {
-  const room = rooms.get(roomCode);
-  const client = room?.clients.get(socketId);
-  if (client && client.ws.readyState === WS_OPEN) {
-    try {
-      client.ws.send(JSON.stringify(msg));
-    } catch (err) {
-      console.error("SendTo error:", err);
-    }
+  legacyManager.sendTo(socketId, roomCode, msg as BroadcastPayload);
+}
+
+export async function getRoomMembers(code: string) {
+  return legacyManager.getMembers(code);
+}
+
+export function isHostInRoom(code: string): boolean {
+  return legacyManager.isHostInRoom(code);
+}
+
+export async function setPlayback(code: string, state: Partial<PlaybackState> & { updatedAt?: number }) {
+  const tl = await legacyManager.getTimeline(code);
+  const next: Partial<TimelineState> = {};
+  if (state.videoId !== undefined) next.videoId = state.videoId;
+  if (state.trackName !== undefined) next.trackName = state.trackName;
+  if (state.artistName !== undefined) next.artistName = state.artistName;
+  if (state.image !== undefined) next.image = state.image;
+  if (state.isPlaying !== undefined) next.isPlaying = state.isPlaying;
+  if (state.currentTime !== undefined) next.positionMs = state.currentTime;
+  if (state.updatedAt !== undefined) next.anchorServerTime = state.updatedAt;
+  if (next.isPlaying !== undefined || next.positionMs !== undefined || next.anchorServerTime !== undefined) {
+    next.anchorServerTime = state.updatedAt ?? Date.now();
   }
+  await legacyManager.setTimeline(code, next);
 }
 
-export function getQueue(code: string): QueueTrack[] {
-  return rooms.get(code)?.queue ?? [];
+export async function getPlayback(code: string): Promise<PlaybackState | null> {
+  return legacyManager.getPlayback(code);
 }
 
-export function addToQueue(code: string, track: QueueTrack) {
-  const room = rooms.get(code);
-  if (!room) return;
-  // Skip if track with same videoId already exists anywhere in queue (prevents glitches)
-  if (room.queue.some((t) => t.videoId === track.videoId)) return;
-  room.queue.splice(1, 0, track);
+export async function getPlaybackMode(code: string): Promise<PlaybackMode> {
+  return legacyManager.getPlaybackMode(code);
 }
 
-export function removeFromQueue(code: string, trackId: string) {
-  const room = rooms.get(code);
-  if (!room) return;
-  room.queue = room.queue.filter((t) => t.id !== trackId);
+export async function setPlaybackMode(code: string, mode: Partial<PlaybackMode>) {
+  const updates: Partial<TimelineState> = {};
+  if (mode.shuffle !== undefined) updates.shuffle = mode.shuffle;
+  if (mode.repeatMode !== undefined) updates.repeatMode = mode.repeatMode;
+  await legacyManager.setTimeline(code, updates);
 }
 
-export function insertQueueTop(code: string, track: QueueTrack) {
-  const room = rooms.get(code);
-  if (!room) return;
-  room.queue = room.queue.filter(
-    (t) => t.id !== track.id || t.videoId !== track.videoId,
-  );
-  room.queue.unshift(track);
+export async function getQueue(code: string): Promise<QueueTrack[]> {
+  return legacyManager.getQueue(code);
 }
 
-export function moveQueueTrackToEnd(code: string, trackId: string) {
-  const room = rooms.get(code);
-  if (!room) return;
-  const track = room.queue.find((item) => item.id === trackId);
-  if (!track) return;
-  room.queue = room.queue.filter((item) => item.id !== trackId);
-  room.queue.push(track);
+export async function addToQueue(code: string, track: QueueTrack) {
+  await legacyManager.addToQueue(code, track);
 }
 
-export function clearQueue(code: string) {
-  const room = rooms.get(code);
-  if (!room) return;
-  room.queue = [];
+export async function removeFromQueue(code: string, trackId: string) {
+  await legacyManager.removeFromQueue(code, trackId);
+}
+
+export async function insertQueueTop(code: string, track: QueueTrack) {
+  await legacyManager.insertQueueTop(code, track);
+}
+
+export async function moveQueueTrackToEnd(code: string, trackId: string) {
+  await legacyManager.moveQueueTrackToEnd(code, trackId);
+}
+
+export async function clearQueue(code: string) {
+  await legacyManager.clearQueue(code);
+}
+
+export function pushRecentTrack(code: string, track: RecentTrack) {
+  legacyManager.pushRecentTrack(code, track);
+}
+
+export function getRecentTracks(code: string): RecentTrack[] {
+  return legacyManager.getRecentTracks(code);
 }
