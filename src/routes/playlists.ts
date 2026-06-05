@@ -213,6 +213,30 @@ async function getAppleMusicPlaylistTracks(url: string): Promise<{ name: string;
   }
 }
 
+function normalizeStr(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function isMatch(title: string, artist: string, expectedTitle: string, expectedArtist: string): boolean {
+  const cleanTitle = normalizeStr(title);
+  const cleanArtist = normalizeStr(artist);
+  const cleanExpectedTitle = normalizeStr(expectedTitle);
+  const cleanExpectedArtist = normalizeStr(expectedArtist);
+
+  const titleMatch = cleanTitle.includes(cleanExpectedTitle) || cleanExpectedTitle.includes(cleanTitle);
+  const titleWords = cleanExpectedTitle.split(" ");
+  const partialTitle = titleWords.slice(0, Math.min(3, titleWords.length)).join(" ");
+  const partialMatch = partialTitle.length > 3 && cleanTitle.includes(partialTitle);
+
+  const hasArtist = cleanExpectedArtist.length > 0 && cleanExpectedArtist !== "unknown artist";
+  const artistMatch = !hasArtist ||
+    cleanArtist.includes(cleanExpectedArtist) ||
+    cleanExpectedArtist.includes(cleanArtist) ||
+    cleanExpectedArtist.split(" ").some((w: string) => w.length > 2 && cleanArtist.includes(w));
+
+  return (titleMatch || partialMatch) && artistMatch;
+}
+
 async function resolveTrackToJioSaavn(
   trackName: string,
   artistName: string,
@@ -220,6 +244,16 @@ async function resolveTrackToJioSaavn(
   const query = `${trackName} ${artistName !== "Unknown Artist" ? artistName : ""}`.trim();
   try {
     const results = await searchJioSaavnResults(query);
+    const match = results.find((r) =>
+      isMatch(r.name, r.artists[0]?.name || "", trackName, artistName)
+    );
+    if (match) {
+      return {
+        videoId: match.videoId,
+        image: match.image,
+        durationMs: match.duration_ms,
+      };
+    }
     if (results.length > 0) {
       const track = results[0];
       return {
@@ -232,6 +266,60 @@ async function resolveTrackToJioSaavn(
     console.error("JioSaavn search failed:", err);
   }
   return { videoId: "", image: "", durationMs: 0 };
+}
+
+// ── JioSaavn Playlist Import ──
+
+interface JioSaavnPlaylistTrack {
+  id: string;
+  title: string;
+  artists: string;
+  image: string;
+  duration: number;
+}
+
+async function getJioSaavnPlaylistTracks(url: string): Promise<{ name: string; tracks: JioSaavnPlaylistTrack[] } | null> {
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const playlistIdx = segments.findIndex((s) => s === "playlist");
+    if (playlistIdx < 0 || playlistIdx >= segments.length - 1) return null;
+    const playlistId = segments[segments.length - 1];
+
+    const apiUrl = new URL("https://www.jiosaavn.com/api.php");
+    apiUrl.searchParams.set("__call", "playlist.getDetails");
+    apiUrl.searchParams.set("_format", "json");
+    apiUrl.searchParams.set("cc", "in");
+    apiUrl.searchParams.set("_marker", "0");
+    apiUrl.searchParams.set("listid", playlistId);
+
+    const res = await fetch(apiUrl.toString(), {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        Referer: "https://www.jiosaavn.com/",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    const list = data?.list ? JSON.parse(data.list) : data;
+    const songs: any[] = list?.songs ?? [];
+
+    return {
+      name: list?.title || data?.title || "Imported JioSaavn Playlist",
+      tracks: songs.map((s: any) => ({
+        id: s.id || "",
+        title: s.song || s.title || "Unknown Track",
+        artists: s.primary_artists || s.singers || s.music || "Unknown Artist",
+        image: (s.image || "").replace("150x150", "500x500").replace("50x50", "500x500"),
+        duration: Number(s.duration) || 0,
+      })),
+    };
+  } catch (err) {
+    console.error("JioSaavn playlist fetch failed:", err);
+    return null;
+  }
 }
 
 // ── ENDPOINTS ──
@@ -458,23 +546,65 @@ playlistsRoute.post("/liked/toggle", async (c) => {
   }
 });
 
-// POST /api/playlists/import — Import a Spotify, YouTube Music, or Apple Music playlist link
+// POST /api/playlists/import — Import a Spotify, JioSaavn, or Apple Music playlist link
 playlistsRoute.post("/import", async (c) => {
   const userId = c.get("userId");
   const { url } = await c.req.json();
   if (!url?.trim()) return c.json({ error: "Playlist link is required" }, 400);
 
   const isSpotify = url.includes("spotify.com");
-  const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
+  const isJioSaavn = url.includes("jiosaavn.com");
   const isAppleMusic = url.includes("music.apple.com");
 
-  if (!isSpotify && !isYouTube && !isAppleMusic) {
-    return c.json({ error: "Invalid playlist URL. Please provide a Spotify, YouTube Music, or Apple Music link." }, 400);
+  if (!isSpotify && !isJioSaavn && !isAppleMusic) {
+    return c.json({ error: "Invalid playlist URL. Please provide a Spotify, JioSaavn, or Apple Music link." }, 400);
   }
 
   try {
-    if (isYouTube) {
-      return c.json({ error: "YouTube playlist import is not supported. Use Spotify or Apple Music links." }, 400);
+    if (isJioSaavn) {
+      // ── JioSaavn Import ──
+      const scraped = await getJioSaavnPlaylistTracks(url);
+      if (!scraped || scraped.tracks.length === 0) {
+        return c.json({ error: "Failed to fetch JioSaavn playlist. Ensure the playlist is public." }, 404);
+      }
+
+      const [newPlaylist] = await db
+        .insert(playlists)
+        .values({
+          userId,
+          name: scraped.name,
+          isLiked: false,
+        })
+        .returning();
+
+      const tracksToInsert: any[] = [];
+      const chunks = chunkArray(scraped.tracks, 5);
+      let positionCounter = 0;
+
+      for (const chunk of chunks) {
+        const resolvedList = await Promise.all(
+          chunk.map(async (item: JioSaavnPlaylistTrack) => ({
+            playlistId: newPlaylist.id,
+            videoId: item.id,
+            trackName: item.title,
+            artistName: item.artists,
+            image: item.image,
+            durationMs: item.duration * 1000,
+          }))
+        );
+
+        for (const item of resolvedList) {
+          if (item) {
+            tracksToInsert.push({ ...item, position: positionCounter++ });
+          }
+        }
+      }
+
+      if (tracksToInsert.length > 0) {
+        await db.insert(playlistTracks).values(tracksToInsert);
+      }
+
+      return c.json({ playlist: newPlaylist, trackCount: tracksToInsert.length });
     } else if (isAppleMusic) {
       // ── Apple Music Import ──
       const scraped = await getAppleMusicPlaylistTracks(url);
