@@ -6,8 +6,6 @@ import {
   broadcast,
   sendTo,
   getRoomMembers,
-  setPlayback,
-  getPlayback,
   isHostInRoom,
   type WSClient,
   type ChatMessage,
@@ -18,12 +16,19 @@ import {
   removeFromQueue,
   insertQueueTop,
   getPlaybackMode,
-  setPlaybackMode,
   moveQueueTrackToEnd,
   type QueueTrack,
   type RepeatMode,
   clearQueue,
+  getPlayback,
+  setPlayback,
 } from "./roomManager.js";
+import {
+  currentPosition,
+  createPlaySnapshot,
+  createPauseSnapshot,
+  createSeekSnapshot,
+} from "../lib/timeline.js";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
 import { rooms, roomQueue } from "../db/schema.js";
@@ -32,9 +37,9 @@ import { pushTrackHistory } from "../db/trackHistory.js";
 
 export type WSMessage =
   | { type: "clock_sync"; serverTime: number }
-  | { type: "play"; videoId: string; seekTo: number; serverTime: number; id?: string; trackName?: string; artistName?: string; image?: string; duration_ms?: number; recentTracks?: any[] }
-  | { type: "pause"; serverTime: number }
-  | { type: "seek"; seekTo: number; serverTime: number };
+  | { type: "play"; videoId: string; seekTo: number; serverTime: number; anchorServerTime: number; id?: string; trackName?: string; artistName?: string; image?: string; duration_ms?: number; recentTracks?: any[] }
+  | { type: "pause"; serverTime: number; anchorServerTime: number; positionMs: number }
+  | { type: "seek"; seekTo: number; serverTime: number; anchorServerTime: number };
 
 type IncomingMessage =
   | { type: "playback:play"; id?: string; videoId: string; trackName?: string; artistName?: string; image?: string; currentTime?: number; duration_ms?: number }
@@ -43,7 +48,6 @@ type IncomingMessage =
   | { type: "playback:ended"; currentTime?: number }
   | { type: "playback:mode"; shuffle?: boolean; repeatMode?: RepeatMode }
   | { type: "playback:sync_request" }
-  | { type: "progress"; currentTime: number }
   | { type: "chat:send"; text: string }
   | { type: "queue:add"; track: QueueTrack }
   | { type: "queue:remove"; trackId: string }
@@ -65,7 +69,6 @@ async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
   const promise = (async () => {
     try {
       await db.delete(roomQueue).where(eq(roomQueue.roomId, roomId));
-
       if (queue.length > 0) {
         const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
         const values = queue.map((track, index) => ({
@@ -103,10 +106,10 @@ async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
 function scheduleQueueSync(roomId: string, roomCode: string) {
   const existing = syncDebounceTimers.get(roomId);
   if (existing) clearTimeout(existing);
-
-  syncDebounceTimers.set(roomId, setTimeout(() => {
+  syncDebounceTimers.set(roomId, setTimeout(async () => {
     syncDebounceTimers.delete(roomId);
-    syncQueueToDb(roomId, getQueue(roomCode)).catch(console.error);
+    const q = await getQueue(roomCode);
+    syncQueueToDb(roomId, q).catch(console.error);
   }, 10_000));
 }
 
@@ -170,55 +173,58 @@ export async function handleWS(ws: any, url: URL) {
   }
 
   const room = getOrCreateRoom(roomCode, dbRoom.hostId);
-  addClient(client);
+  await addClient(client);
 
-  if (!room.isQueueLoaded) {
-    try {
-      const dbQueue = await db
-        .select()
-        .from(roomQueue)
-        .where(eq(roomQueue.roomId, dbRoom.id))
-        .orderBy(asc(roomQueue.position));
+  const queueFromDb = await db
+    .select()
+    .from(roomQueue)
+    .where(eq(roomQueue.roomId, dbRoom.id))
+    .orderBy(asc(roomQueue.position));
 
-      room.queue = dbQueue.map((item) => ({
-        id: item.id,
-        videoId: item.videoId,
-        name: item.trackName,
-        artists: [{ name: item.artistName }],
-        image: item.image,
-        duration_ms: item.durationMs,
-      }));
-      room.isQueueLoaded = true;
-    } catch (err) {
-      console.error("Failed to load queue from database:", err);
-    }
+  const loadedQueue: QueueTrack[] = queueFromDb.map((item) => ({
+    id: item.id,
+    videoId: item.videoId,
+    name: item.trackName,
+    artists: [{ name: item.artistName }],
+    image: item.image,
+    duration_ms: item.durationMs,
+  }));
+
+  const existingQueue = await getQueue(roomCode);
+  if (existingQueue.length === 0 && loadedQueue.length > 0) {
+    for (const t of loadedQueue) await addToQueue(roomCode, t);
   }
 
+  const serverNow = Date.now();
   ws.send(JSON.stringify({
     type: "clock_sync",
-    serverTime: Date.now(),
+    serverTime: serverNow,
   } satisfies Extract<WSMessage, { type: "clock_sync" }>));
+
+  const [playback, playMode, members, recent, q] = await Promise.all([
+    getPlayback(roomCode),
+    getPlaybackMode(roomCode),
+    getRoomMembers(roomCode),
+    getRecentTracks(roomCode),
+    getQueue(roomCode),
+  ]);
 
   ws.send(JSON.stringify({
     type: "room:joined",
     roomCode,
     isHost: room.hostId === payload.sub,
-    members: getRoomMembers(roomCode),
-    playback: getPlayback(roomCode),
-    playbackMode: getPlaybackMode(roomCode),
-    recentTracks: getRecentTracks(roomCode),
-    queue: getQueue(roomCode),
+    members,
+    playback,
+    playbackMode: playMode,
+    recentTracks: recent,
+    queue: q,
   }));
 
-  broadcast(
-    roomCode,
-    {
-      type: "room:member_joined",
-      members: getRoomMembers(roomCode),
-      user: { userId: payload.sub, name: payload.name, avatar: payload.avatar },
-    },
-    socketId,
-  );
+  broadcast(roomCode, {
+    type: "room:member_joined",
+    members: await getRoomMembers(roomCode),
+    user: { userId: payload.sub, name: payload.name, avatar: payload.avatar },
+  }, socketId);
 
   return {
     async onMessage(event: any) {
@@ -232,6 +238,8 @@ export async function handleWS(ws: any, url: URL) {
 
       console.log(`[WS] ${payload.name}: ${msg.type}`, JSON.stringify(msg).slice(0, 200));
 
+      const serverNow = Date.now();
+
       switch (msg.type) {
         case "chat:send": {
           const chatMsg: ChatMessage = {
@@ -240,7 +248,7 @@ export async function handleWS(ws: any, url: URL) {
             name: payload.name,
             avatar: payload.avatar,
             text: String(msg.text).slice(0, 500),
-            ts: Date.now(),
+            ts: serverNow,
           };
           broadcast(roomCode, { type: "chat:message", message: chatMsg });
           break;
@@ -250,45 +258,44 @@ export async function handleWS(ws: any, url: URL) {
           if (!msg.videoId) return;
 
           const seekTo = Math.max(0, Number(msg.currentTime ?? 0));
-          const serverTime = Date.now();
+          const currentTl = await getPlayback(roomCode);
 
-          const currentPlayback = getPlayback(roomCode);
-          if (currentPlayback?.videoId && currentPlayback.videoId !== msg.videoId) {
-            if (currentPlayback.isPlaying) {
+          if (currentTl?.videoId && currentTl.videoId !== msg.videoId) {
+            if (currentTl.isPlaying) {
               pushTrackHistory(dbRoom.id, {
-                videoId: currentPlayback.videoId,
-                trackName: currentPlayback.trackName ?? "",
-                artistName: currentPlayback.artistName ?? "",
-                image: currentPlayback.image ?? "",
+                videoId: currentTl.videoId,
+                trackName: currentTl.trackName ?? "",
+                artistName: currentTl.artistName ?? "",
+                image: currentTl.image ?? "",
               }).catch(console.error);
 
               pushRecentTrack(roomCode, {
-                videoId: currentPlayback.videoId,
-                trackName: currentPlayback.trackName ?? "",
-                artistName: currentPlayback.artistName ?? "",
-                image: currentPlayback.image ?? "",
-                playedAt: Date.now(),
+                videoId: currentTl.videoId,
+                trackName: currentTl.trackName ?? "",
+                artistName: currentTl.artistName ?? "",
+                image: currentTl.image ?? "",
+                playedAt: serverNow,
               });
             }
 
-            const oldTrack = getQueue(roomCode).find(
-              (t) => t.videoId === currentPlayback.videoId || t.id === currentPlayback.videoId,
+            const oldTrack = (await getQueue(roomCode)).find(
+              (t) => t.videoId === currentTl.videoId || t.id === currentTl.videoId,
             );
-            if (oldTrack) moveQueueTrackToEnd(roomCode, oldTrack.id);
+            if (oldTrack) await moveQueueTrackToEnd(roomCode, oldTrack.id);
           }
 
-          setPlayback(roomCode, {
+          await setPlayback(roomCode, {
             videoId: msg.videoId,
             trackName: msg.trackName ?? "",
             artistName: msg.artistName ?? "",
             image: msg.image ?? "",
             isPlaying: true,
             currentTime: seekTo,
-            updatedAt: serverTime,
+            updatedAt: serverNow,
           });
 
           if (msg.videoId) {
-            insertQueueTop(roomCode, {
+            await insertQueueTop(roomCode, {
               id: msg.id || `room-${msg.videoId}`,
               videoId: msg.videoId,
               name: msg.trackName ?? "",
@@ -300,13 +307,14 @@ export async function handleWS(ws: any, url: URL) {
 
           scheduleQueueSync(dbRoom.id, roomCode);
 
-          broadcast(roomCode, { type: "room:queue_update", queue: getQueue(roomCode) });
+          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
 
           broadcast(roomCode, {
             type: "play",
             videoId: msg.videoId,
             seekTo,
-            serverTime,
+            serverTime: serverNow,
+            anchorServerTime: serverNow,
             id: msg.id || `room-${msg.videoId}`,
             trackName: msg.trackName ?? "",
             artistName: msg.artistName ?? "",
@@ -314,19 +322,37 @@ export async function handleWS(ws: any, url: URL) {
             duration_ms: msg.duration_ms ?? 0,
             recentTracks: getRecentTracks(roomCode),
           });
-
           break;
         }
         case "playback:pause": {
           if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
 
-          setPlayback(roomCode, {
+          const currentTl = await getPlayback(roomCode);
+          const pauseSnapshot = createPauseSnapshot(
+            {
+              videoId: currentTl?.videoId ?? null,
+              trackName: currentTl?.trackName ?? "",
+              artistName: currentTl?.artistName ?? "",
+              image: currentTl?.image ?? "",
+              isPlaying: currentTl?.isPlaying ?? false,
+              positionMs: currentTl?.currentTime ?? 0,
+              anchorServerTime: currentTl?.updatedAt ?? serverNow,
+            },
+            serverNow,
+          );
+
+          await setPlayback(roomCode, {
             isPlaying: false,
-            currentTime: Math.max(0, Number(msg.currentTime ?? 0)),
-            updatedAt: Date.now(),
+            currentTime: pauseSnapshot.positionMs,
+            updatedAt: pauseSnapshot.anchorServerTime,
           });
 
-          broadcast(roomCode, { type: "pause", serverTime: Date.now() });
+          broadcast(roomCode, {
+            type: "pause",
+            serverTime: serverNow,
+            anchorServerTime: pauseSnapshot.anchorServerTime,
+            positionMs: pauseSnapshot.positionMs,
+          } satisfies Extract<WSMessage, { type: "pause" }>);
           break;
         }
         case "playback:seek": {
@@ -334,17 +360,22 @@ export async function handleWS(ws: any, url: URL) {
 
           const seekTo = Math.max(0, Number(msg.currentTime ?? 0));
 
-          setPlayback(roomCode, {
+          await setPlayback(roomCode, {
             currentTime: seekTo,
-            updatedAt: Date.now(),
+            updatedAt: serverNow,
           });
 
-          broadcast(roomCode, { type: "seek", seekTo, serverTime: Date.now() });
+          broadcast(roomCode, {
+            type: "seek",
+            seekTo,
+            serverTime: serverNow,
+            anchorServerTime: serverNow,
+          } satisfies Extract<WSMessage, { type: "seek" }>);
           break;
         }
         case "playback:ended": {
           if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
-          const currentPlayback = getPlayback(roomCode);
+          const currentPlayback = await getPlayback(roomCode);
           if (!currentPlayback?.videoId) return;
 
           pushTrackHistory(dbRoom.id, {
@@ -359,33 +390,35 @@ export async function handleWS(ws: any, url: URL) {
             trackName: currentPlayback.trackName ?? "",
             artistName: currentPlayback.artistName ?? "",
             image: currentPlayback.image ?? "",
-            playedAt: Date.now(),
+            playedAt: serverNow,
           });
 
-          const endedTrack = getQueue(roomCode).find(
+          const q = await getQueue(roomCode);
+          const endedTrack = q.find(
             (t) => t.videoId === currentPlayback.videoId || t.id === currentPlayback.videoId,
           );
-          if (endedTrack) moveQueueTrackToEnd(roomCode, endedTrack.id);
+          if (endedTrack) await moveQueueTrackToEnd(roomCode, endedTrack.id);
 
-          const queue = getQueue(roomCode);
-          const nextTrack = queue.length > 0 ? queue[0] : null;
+          const refreshedQueue = await getQueue(roomCode);
+          const nextTrack = refreshedQueue.length > 0 ? refreshedQueue[0] : null;
 
           if (nextTrack) {
-            setPlayback(roomCode, {
+            await setPlayback(roomCode, {
               videoId: nextTrack.videoId,
               trackName: nextTrack.name,
               artistName: nextTrack.artists?.[0]?.name ?? "",
               image: nextTrack.image ?? "",
               isPlaying: true,
               currentTime: 0,
-              updatedAt: Date.now(),
+              updatedAt: serverNow,
             });
 
             broadcast(roomCode, {
               type: "play",
               videoId: nextTrack.videoId,
               seekTo: 0,
-              serverTime: Date.now(),
+              serverTime: serverNow,
+              anchorServerTime: serverNow,
               id: nextTrack.id,
               trackName: nextTrack.name,
               artistName: nextTrack.artists?.[0]?.name ?? "",
@@ -396,86 +429,84 @@ export async function handleWS(ws: any, url: URL) {
 
             scheduleQueueSync(dbRoom.id, roomCode);
           } else {
-            setPlayback(roomCode, {
+            await setPlayback(roomCode, {
               isPlaying: false,
               videoId: null,
               currentTime: Math.max(0, Number(msg.currentTime ?? currentPlayback.currentTime ?? 0)),
+              updatedAt: serverNow,
             });
           }
           break;
         }
         case "playback:mode": {
           if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
-          setPlaybackMode(roomCode, {
+          const mode = await getPlaybackMode(roomCode);
+          const next = {
+            ...mode,
             ...(typeof msg.shuffle === "boolean" ? { shuffle: msg.shuffle } : {}),
             ...(msg.repeatMode ? { repeatMode: msg.repeatMode } : {}),
-          });
+          };
+          await setPlayback(roomCode, {
+            ...(next.shuffle !== undefined ? { shuffle: next.shuffle } : {}),
+            ...(next.repeatMode ? { repeatMode: next.repeatMode } : {}),
+          } as any);
           broadcast(roomCode, {
             type: "room:playback_mode",
-            playbackMode: getPlaybackMode(roomCode),
+            playbackMode: await getPlaybackMode(roomCode),
           });
-          break;
-        }
-        case "progress": {
-          if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
-          const playback = getPlayback(roomCode);
-          if (playback) {
-            setPlayback(roomCode, {
-              currentTime: Math.max(0, Number(msg.currentTime ?? 0)),
-            });
-          }
           break;
         }
         case "playback:sync_request": {
+          const pb = await getPlayback(roomCode);
           sendTo(socketId, roomCode, {
             type: "playback:sync",
-            ...getPlayback(roomCode),
-            playbackMode: getPlaybackMode(roomCode),
+            ...pb,
+            playbackMode: await getPlaybackMode(roomCode),
             recentTracks: getRecentTracks(roomCode),
-            queue: getQueue(roomCode),
+            queue: await getQueue(roomCode),
           });
           break;
         }
         case "queue:add": {
-          addToQueue(roomCode, msg.track);
-          broadcast(roomCode, { type: "room:queue_update", queue: getQueue(roomCode) });
+          await addToQueue(roomCode, msg.track);
+          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
           scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
         case "queue:remove": {
-          removeFromQueue(roomCode, msg.trackId);
-          broadcast(roomCode, { type: "room:queue_update", queue: getQueue(roomCode) });
+          await removeFromQueue(roomCode, msg.trackId);
+          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
           scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
         case "queue:cycle_current": {
           if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
-          moveQueueTrackToEnd(roomCode, msg.trackId);
-          broadcast(roomCode, { type: "room:queue_update", queue: getQueue(roomCode) });
+          await moveQueueTrackToEnd(roomCode, msg.trackId);
+          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
           scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
         case "queue:clear": {
-          clearQueue(roomCode);
-          broadcast(roomCode, { type: "room:queue_update", queue: getQueue(roomCode) });
+          await clearQueue(roomCode);
+          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
           scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
       }
     },
 
-    onClose() {
+    async onClose() {
       try {
         removeClient(socketId, roomCode);
         const timer = syncDebounceTimers.get(dbRoom.id);
         if (timer) {
           clearTimeout(timer);
           syncDebounceTimers.delete(dbRoom.id);
-          syncQueueToDb(dbRoom.id, getQueue(roomCode)).catch(console.error);
+          syncQueueToDb(dbRoom.id, await getQueue(roomCode)).catch(console.error);
         }
         broadcast(roomCode, {
           type: "room:member_left",
-          members: getRoomMembers(roomCode),
+          members: await getRoomMembers(roomCode),
           userId: payload.sub,
         });
       } catch (err) {
