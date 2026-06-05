@@ -1,4 +1,4 @@
-import { auth } from "../lib/auth.js";
+import { getSessionFromRequest } from "../lib/auth.js";
 import { decodeJwt } from "jose";
 import {
   getOrCreateRoom,
@@ -138,9 +138,9 @@ export async function handleWS(ws: any, url: URL) {
     user = cached.user;
   } else {
     try {
-      const session = await auth.api.getSession({
-        headers: new Headers({ Authorization: `Bearer ${token}` }),
-      });
+      const session = await getSessionFromRequest(
+        new Headers({ Authorization: `Bearer ${token}` }),
+      );
       if (!session?.user) throw new Error("No session");
       user = session.user;
     } catch {
