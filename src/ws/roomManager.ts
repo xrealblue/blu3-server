@@ -78,6 +78,12 @@ export class RoomManager {
         try { client.ws.send(data); } catch {}
       }
     });
+    await this.store.addMember(client.roomCode, {
+      userId: client.userId,
+      name: client.name,
+      avatar: client.avatar,
+      joinedAt: Date.now(),
+    });
   }
 
   removeClient(socketId: string, _roomCode: string): void {
@@ -85,6 +91,7 @@ export class RoomManager {
     if (entry) {
       this.broadcaster.removeSocket(socketId, entry.roomCode);
       this.clientMap.delete(socketId);
+      this.store.removeMember(entry.roomCode, entry.client.userId).catch(console.error);
     }
   }
 

@@ -4,6 +4,7 @@ import { rooms, roomMembers, users, roomTrackHistory } from "../db/schema.js";
 import { eq, and, desc } from "drizzle-orm";
 import { customAlphabet } from "nanoid";
 import { getSessionFromRequest } from "../lib/auth.js";
+import { getCached, setCache } from "../lib/responseCache.js";
 
 type RoomsEnv = {
   Variables: {
@@ -139,6 +140,9 @@ roomsRoute.post("/:code/leave", requireAuth, async (c) => {
 // GET /api/rooms/user/mine — all rooms for current user
 roomsRoute.get("/user/mine", requireAuth, async (c) => {
   const userId = c.get("userId");
+  const cacheKey = `rooms:mine:${userId}`;
+  const cached = getCached(cacheKey);
+  if (cached) return c.json(cached);
 
   const myRooms = await db
     .select({
@@ -177,7 +181,9 @@ roomsRoute.get("/user/mine", requireAuth, async (c) => {
     }),
   );
 
-  return c.json({ rooms: roomsWithLastTrack });
+  const result = { rooms: roomsWithLastTrack };
+  setCache(cacheKey, result);
+  return c.json(result);
 });
 
 export default roomsRoute;

@@ -4,6 +4,7 @@ import { playlists, playlistTracks } from "../db/schema.js";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { searchJioSaavnResults } from "../lib/jiosaavnAudio.js";
 import { getSessionFromRequest } from "../lib/auth.js";
+import { getCached, setCache } from "../lib/responseCache.js";
 
 type PlaylistsEnv = {
   Variables: {
@@ -378,6 +379,9 @@ async function getYouTubePlaylistTracks(url: string): Promise<{ name: string; tr
 // GET /api/playlists — Fetch all playlists for current user (Self-Healing "Liked Songs")
 playlistsRoute.get("/", async (c) => {
   const userId = c.get("userId");
+  const cacheKey = `playlists:${userId}`;
+  const cached = getCached(cacheKey);
+  if (cached) return c.json(cached);
   try {
     let userPlaylists = await db
       .select()
@@ -418,7 +422,9 @@ playlistsRoute.get("/", async (c) => {
       })
     );
 
-    return c.json({ playlists: enriched });
+    const result = { playlists: enriched };
+    setCache(cacheKey, result);
+    return c.json(result);
   } catch (err) {
     console.error("Failed to fetch playlists:", err);
     return c.json({ error: "Failed to fetch playlists" }, 500);
