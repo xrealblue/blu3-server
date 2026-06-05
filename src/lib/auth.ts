@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
+import { dash } from "@better-auth/infra";
 import { db } from "../db/index.js";
 import * as schema from "../db/schema.js";
 
@@ -13,6 +14,7 @@ export const auth = betterAuth({
       verification: schema.verifications,
     },
   }),
+  plugins: [dash()],
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID!,

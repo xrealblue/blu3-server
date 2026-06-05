@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@better-auth/drizzle-adapter": "^1.6.14",
+    "@better-auth/infra": "^0.2.13",
     "@hono/node-server": "^2.0.3",
     "@neondatabase/serverless": "^1.1.0",
     "@upstash/redis": "^1.38.0",
