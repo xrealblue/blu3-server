@@ -2,6 +2,7 @@ import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { verify } from "hono/jwt";
 import * as dotenv from "dotenv";
 import { existsSync } from "fs";
 dotenv.config();
@@ -15,6 +16,18 @@ import { YtMusicSearchProvider } from "./lib/searchProvider.js";
 import { YtDlpResolver } from "./lib/audioResolver.js";
 import { resolveJioSaavn } from "./lib/jiosaavnAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
+
+const audioCache = new Map<string, { cdnUrl: string; fetchedAt: number }>();
+
+async function verifyAuth(c: any) {
+  const auth = c.req.header("Authorization");
+  if (!auth?.startsWith("Bearer ")) return null;
+  try {
+    return await verify(auth.slice(7), process.env.JWT_SECRET!, "HS256");
+  } catch {
+    return null;
+  }
+}
 
 const getCorsOrigins = (): string[] => {
   const defaultOrigins = ["http://localhost:3000", "https://blu3.in"];
@@ -130,6 +143,9 @@ app.get("/api/resolve/:videoId", async (c) => {
 });
 
 app.post("/api/resolve", async (c) => {
+  const payload = await verifyAuth(c);
+  if (!payload) return c.json({ error: "Unauthorized" }, 401);
+
   let body: { videoId?: string; name?: string; artists?: string };
   try {
     body = await c.req.json();
@@ -147,7 +163,10 @@ app.post("/api/resolve", async (c) => {
 
   if (body.name?.trim()) {
     const jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists);
-    if (jioResult) return c.json(jioResult);
+    if (jioResult?.url) {
+      audioCache.set(body.videoId, { cdnUrl: jioResult.url, fetchedAt: Date.now() });
+      return c.json({ source: "youtube", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
+    }
   }
 
   try {
@@ -157,6 +176,55 @@ app.post("/api/resolve", async (c) => {
   } catch (err) {
     console.error(`[Resolve] error for ${body.videoId}:`, err);
     return c.json({ error: "Resolution failed" }, 500);
+  }
+});
+
+app.get("/api/audio/:videoId", async (c) => {
+  const token = c.req.query("token") ?? c.req.header("Authorization")?.slice(7);
+  if (!token) return c.json({ error: "Unauthorized" }, 401);
+  try {
+    await verify(token, process.env.JWT_SECRET!, "HS256");
+  } catch {
+    return c.json({ error: "Invalid token" }, 401);
+  }
+
+  const videoId = c.req.param("videoId");
+  if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
+
+  const cached = audioCache.get(videoId);
+  if (!cached) return c.json({ error: "Audio not found" }, 404);
+
+  const maxAge = 1800000;
+  if (Date.now() - cached.fetchedAt > maxAge) {
+    audioCache.delete(videoId);
+    return c.json({ error: "Audio expired" }, 404);
+  }
+
+  try {
+    const cdnRes = await fetch(cached.cdnUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Range": c.req.header("Range") ?? "",
+      },
+    });
+    if (!cdnRes.ok && cdnRes.status !== 206) {
+      audioCache.delete(videoId);
+      return c.json({ error: "Source unavailable" }, 502);
+    }
+
+    const responseHeaders: Record<string, string> = {};
+    cdnRes.headers.forEach((value, key) => {
+      if (["content-type", "content-length", "content-range", "accept-ranges"].includes(key.toLowerCase())) {
+        responseHeaders[key] = value;
+      }
+    });
+    responseHeaders["Cache-Control"] = "private, max-age=3600";
+    responseHeaders["X-Content-Type-Options"] = "nosniff";
+
+    return c.newResponse(cdnRes.body as any, cdnRes.status as any, responseHeaders);
+  } catch (err) {
+    console.error(`[AudioProxy] error for ${videoId}:`, err);
+    return c.json({ error: "Proxy failed" }, 502);
   }
 });
 

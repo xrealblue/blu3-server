@@ -286,7 +286,7 @@ export async function handleWS(ws: any, url: URL) {
             if (oldTrack) await moveQueueTrackToEnd(roomCode, oldTrack.id);
           }
 
-          const source = msg.source ?? "youtube";
+          const source = "youtube";
 
           await setPlayback(roomCode, {
             videoId: msg.videoId,
