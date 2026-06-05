@@ -19,6 +19,9 @@ export const auth = betterAuth({
     },
   }),
   plugins: [dash()],
+  accountLinking: {
+    trustedProviders: true,
+  },
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID!,

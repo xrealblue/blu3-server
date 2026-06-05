@@ -58,15 +58,15 @@ ALTER TABLE "playlist_tracks" ALTER COLUMN "playlist_id" TYPE text USING "playli
 -- (gaheet007@gmail.com: old UUID -> new text ID)
 UPDATE "rooms" SET "host_id" = n.id
 FROM "user" n, "users" o
-WHERE o.email = n.email AND "rooms"."host_id" = o.id;
+WHERE o.email = n.email AND "rooms"."host_id" = o.id::text;
 --> statement-breakpoint
 UPDATE "room_members" SET "user_id" = n.id
 FROM "user" n, "users" o
-WHERE o.email = n.email AND "room_members"."user_id" = o.id;
+WHERE o.email = n.email AND "room_members"."user_id" = o.id::text;
 --> statement-breakpoint
 UPDATE "playlists" SET "user_id" = n.id
 FROM "user" n, "users" o
-WHERE o.email = n.email AND "playlists"."user_id" = o.id;
+WHERE o.email = n.email AND "playlists"."user_id" = o.id::text;
 --> statement-breakpoint
 -- Phase 5: Re-add FK constraints (internal app tables + referencing new user table)
 ALTER TABLE "room_members" ADD CONSTRAINT "room_members_room_id_rooms_id_fk"
