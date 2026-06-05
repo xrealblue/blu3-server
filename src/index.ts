@@ -12,8 +12,7 @@ import authRoute from "./routes/auth.js";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
-import { YtMusicSearchProvider } from "./lib/searchProvider.js";
-import { resolveJioSaavn } from "./lib/jiosaavnAudio.js";
+import { resolveJioSaavn, resolveJioSaavnById, searchJioSaavnResults } from "./lib/jiosaavnAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
 
 const audioCache = new Map<string, { cdnUrl: string; fetchedAt: number }>();
@@ -107,8 +106,6 @@ app.get(
   }),
 );
 
-const searchProvider = new YtMusicSearchProvider();
-
 app.get("/api/search", async (c) => {
   const q = c.req.query("q");
   if (!q?.trim()) return c.json({ tracks: [] });
@@ -120,8 +117,8 @@ app.get("/api/search", async (c) => {
   }
 
   try {
-    const result = await searchProvider.search(q);
-    return c.json(result);
+    const tracks = await searchJioSaavnResults(q);
+    return c.json({ tracks });
   } catch (err) {
     console.error("Search error:", err);
     return c.json({ error: "Search failed" }, 500);
@@ -147,12 +144,20 @@ app.post("/api/resolve", async (c) => {
     return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
   }
 
-  if (body.name?.trim()) {
-    const jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists);
-    if (jioResult?.url) {
-      audioCache.set(body.videoId, { cdnUrl: jioResult.url, fetchedAt: Date.now() });
-      return c.json({ source: "youtube", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
-    }
+  let jioResult = null;
+
+  const isNumericId = /^\d+$/.test(body.videoId);
+  if (isNumericId) {
+    jioResult = await resolveJioSaavnById(body.videoId);
+  }
+
+  if (!jioResult && body.name?.trim()) {
+    jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists);
+  }
+
+  if (jioResult?.url) {
+    audioCache.set(body.videoId, { cdnUrl: jioResult.url, fetchedAt: Date.now() });
+    return c.json({ source: "youtube", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
   }
 
   return c.json({ source: "youtube", videoId: body.videoId });
@@ -207,21 +212,7 @@ app.get("/api/audio/:videoId", async (c) => {
 });
 
 app.get("/api/suggest", async (c) => {
-  const q = c.req.query("q");
-  if (!q?.trim()) return c.json({ suggestions: [] });
-  try {
-    const res = await fetch(
-      `https://suggestqueries-clients6.youtube.com/complete/search?client=youtube&ds=yt&q=${encodeURIComponent(q)}`,
-    );
-    const text = await res.text();
-    const match = text.match(/\[.*\]/s);
-    if (!match) return c.json({ suggestions: [] });
-    const parsed = JSON.parse(match[0]);
-    const suggestions: string[] = (parsed[1] ?? []).map((s: unknown[]) => String(s[0]));
-    return c.json({ suggestions: suggestions.slice(0, 8) });
-  } catch {
-    return c.json({ suggestions: [] });
-  }
+  return c.json({ suggestions: [] });
 });
 
 const port = Number(process.env.PORT ?? 8000);

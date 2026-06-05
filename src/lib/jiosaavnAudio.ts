@@ -21,6 +21,17 @@ interface ResolveResult {
   videoId: string;
 }
 
+export interface JioSearchTrack {
+  id: string;
+  videoId: string;
+  name: string;
+  duration_ms: number;
+  artists: { name: string }[];
+  album: { name: string };
+  image: string;
+  source: string;
+}
+
 function decryptMediaUrl(encrypted: string): string {
   const key = CryptoJS.enc.Utf8.parse(JIOSAAVN_DES_KEY);
   const ciphertext = CryptoJS.enc.Base64.parse(encrypted);
@@ -115,6 +126,58 @@ function normalizeQuery(name: string, artists?: string): string {
   let q = name.trim();
   if (artists?.trim()) q += ` ${artists.trim().split(",")[0].trim()}`;
   return q.toLowerCase().replace(/\(.*?\)/g, "").replace(/\[.*?\]/g, "").trim();
+}
+
+export async function searchJioSaavnResults(query: string): Promise<JioSearchTrack[]> {
+  try {
+    const url = new URL(SEARCH_BASE);
+    url.searchParams.set("__call", "search.getResults");
+    url.searchParams.set("_format", "json");
+    url.searchParams.set("_marker", "0");
+    url.searchParams.set("ctx", "wap6dot0");
+    url.searchParams.set("q", normalizeQuery(query));
+    url.searchParams.set("n", "20");
+    url.searchParams.set("p", "1");
+
+    const res = await fetch(url.toString(), {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        Referer: "https://www.jiosaavn.com/",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (!res.ok) return [];
+    const data = await res.json();
+    const results: any[] = data?.results ?? [];
+
+    return results.map((raw: any) => ({
+      id: raw.id || "",
+      videoId: raw.id || "",
+      name: raw.song || raw.title || "",
+      duration_ms: (Number(raw.duration) || 0) * 1000,
+      artists: [{ name: raw.primary_artists || raw.singers || raw.music || "Unknown" }],
+      album: { name: raw.album || "" },
+      image: (raw.image || "").replace("150x150", "500x500").replace("50x50", "500x500"),
+      source: "jiosaavn",
+    }));
+  } catch (err) {
+    console.error("[JioSaavn] search failed:", err);
+    return [];
+  }
+}
+
+export async function resolveJioSaavnById(id: string): Promise<ResolveResult | null> {
+  try {
+    const details = await getSongDetails(id);
+    if (!details?.encryptedUrl) return null;
+    const url = getBestQualityUrl(details.encryptedUrl, details.has320);
+    if (url) return { url, source: "jiosaavn", videoId: id };
+    return null;
+  } catch (err) {
+    console.error("[JioSaavn] resolveById failed:", err);
+    return null;
+  }
 }
 
 export async function resolveJioSaavn(

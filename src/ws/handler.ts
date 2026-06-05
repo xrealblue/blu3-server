@@ -299,18 +299,6 @@ export async function handleWS(ws: any, url: URL) {
             updatedAt: serverNow,
           });
 
-          if (msg.videoId) {
-            await insertQueueTop(roomCode, {
-              id: msg.id || `room-${msg.videoId}`,
-              source,
-              videoId: msg.videoId,
-              name: msg.trackName ?? "",
-              artists: [{ name: msg.artistName ?? "" }],
-              image: msg.image ?? "",
-              duration_ms: msg.duration_ms ?? 0,
-            });
-          }
-
           scheduleQueueSync(dbRoom.id, roomCode);
 
           broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
@@ -407,45 +395,16 @@ export async function handleWS(ws: any, url: URL) {
           );
           if (endedTrack) await moveQueueTrackToEnd(roomCode, endedTrack.id);
 
-          const refreshedQueue = await getQueue(roomCode);
-          const nextTrack = refreshedQueue.length > 0 ? refreshedQueue[0] : null;
+          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
 
-          if (nextTrack) {
-            await setPlayback(roomCode, {
-              videoId: nextTrack.videoId,
-              source: nextTrack.source ?? "youtube",
-              trackName: nextTrack.name,
-              artistName: nextTrack.artists?.[0]?.name ?? "",
-              image: nextTrack.image ?? "",
-              isPlaying: true,
-              currentTime: 0,
-              updatedAt: serverNow,
-            });
+          await setPlayback(roomCode, {
+            isPlaying: false,
+            videoId: null,
+            currentTime: Math.max(0, Number(msg.currentTime ?? currentPlayback.currentTime ?? 0)),
+            updatedAt: serverNow,
+          });
 
-            broadcast(roomCode, {
-              type: "play",
-              videoId: nextTrack.videoId,
-              source: nextTrack.source ?? "youtube",
-              seekTo: 0,
-              serverTime: serverNow,
-              anchorServerTime: serverNow,
-              id: nextTrack.id,
-              trackName: nextTrack.name,
-              artistName: nextTrack.artists?.[0]?.name ?? "",
-              image: nextTrack.image ?? "",
-              duration_ms: nextTrack.duration_ms ?? 0,
-              recentTracks: getRecentTracks(roomCode),
-            });
-
-            scheduleQueueSync(dbRoom.id, roomCode);
-          } else {
-            await setPlayback(roomCode, {
-              isPlaying: false,
-              videoId: null,
-              currentTime: Math.max(0, Number(msg.currentTime ?? currentPlayback.currentTime ?? 0)),
-              updatedAt: serverNow,
-            });
-          }
+          scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
         case "playback:mode": {
