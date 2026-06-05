@@ -191,6 +191,9 @@ app.post("/api/resolve", async (c) => {
 });
 
 app.get("/api/ytdl/:videoId", async (c) => {
+  const payload = await verifyAuth(c);
+  if (!payload) return c.json({ error: "Unauthorized" }, 401);
+
   const videoId = c.req.param("videoId");
   if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
 
