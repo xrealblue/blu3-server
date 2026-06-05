@@ -344,7 +344,7 @@ export async function handleWS(ws: any, url: URL) {
               artistName: currentTl?.artistName ?? "",
               image: currentTl?.image ?? "",
               isPlaying: currentTl?.isPlaying ?? false,
-              positionMs: currentTl?.currentTime ?? 0,
+              positionSec: currentTl?.currentTime ?? 0,
               anchorServerTime: currentTl?.updatedAt ?? serverNow,
             },
             serverNow,
@@ -352,7 +352,7 @@ export async function handleWS(ws: any, url: URL) {
 
           await setPlayback(roomCode, {
             isPlaying: false,
-            currentTime: pauseSnapshot.positionMs,
+            currentTime: pauseSnapshot.positionSec,
             updatedAt: pauseSnapshot.anchorServerTime,
           });
 
@@ -360,14 +360,14 @@ export async function handleWS(ws: any, url: URL) {
             type: "pause",
             serverTime: serverNow,
             anchorServerTime: pauseSnapshot.anchorServerTime,
-            positionMs: pauseSnapshot.positionMs,
+            positionSec: pauseSnapshot.positionSec,
           } satisfies Extract<WSMessage, { type: "pause" }>);
           break;
         }
         case "playback:seek": {
           if (!canControlPlayback(roomCode, room.hostId, payload.sub)) return;
 
-          const seekTo = Math.max(0, Number(msg.currentTime ?? 0));
+          const seekTo = clampTime(msg.currentTime);
 
           await setPlayback(roomCode, {
             currentTime: seekTo,
@@ -414,7 +414,7 @@ export async function handleWS(ws: any, url: URL) {
           await setPlayback(roomCode, {
             isPlaying: false,
             videoId: null,
-            currentTime: Math.max(0, Number(msg.currentTime ?? currentPlayback.currentTime ?? 0)),
+            currentTime: clampTime(msg.currentTime ?? currentPlayback.currentTime),
             updatedAt: serverNow,
           });
 
