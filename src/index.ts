@@ -18,6 +18,14 @@ import { resolveJioSaavn } from "./lib/jiosaavnAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
 
 const audioCache = new Map<string, { cdnUrl: string; fetchedAt: number }>();
+const CACHE_TTL = 30 * 60 * 1000;
+
+setInterval(() => {
+  const cutoff = Date.now() - CACHE_TTL;
+  for (const [key, entry] of audioCache) {
+    if (entry.fetchedAt < cutoff) audioCache.delete(key);
+  }
+}, 5 * 60 * 1000);
 
 async function verifyAuth(c: any) {
   const auth = c.req.header("Authorization");
@@ -214,8 +222,7 @@ app.get("/api/audio/:videoId", async (c) => {
   const cached = audioCache.get(videoId);
   if (!cached) return c.json({ error: "Audio not found" }, 404);
 
-  const maxAge = 1800000;
-  if (Date.now() - cached.fetchedAt > maxAge) {
+  if (Date.now() - cached.fetchedAt > CACHE_TTL) {
     audioCache.delete(videoId);
     return c.json({ error: "Audio expired" }, 404);
   }
