@@ -182,6 +182,23 @@ app.post("/api/resolve", async (c) => {
   }
 });
 
+app.get("/api/ytdl/:videoId", async (c) => {
+  const videoId = c.req.param("videoId");
+  if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
+
+  try {
+    const result = await audioResolver.resolve(videoId);
+    if (!result) return c.json({ error: "Failed to resolve audio" }, 502);
+    if (result.url) {
+      audioCache.set(videoId, { cdnUrl: result.url, fetchedAt: Date.now() });
+    }
+    return c.json(result);
+  } catch (err) {
+    console.error(`[Ytdl] error for ${videoId}:`, err);
+    return c.json({ error: "Resolution failed" }, 500);
+  }
+});
+
 app.get("/api/audio/:videoId", async (c) => {
   const token = c.req.query("token") ?? c.req.header("Authorization")?.slice(7);
   if (!token) return c.json({ error: "Unauthorized" }, 401);
