@@ -27,6 +27,7 @@ export interface ChatMessage {
 
 export interface PlaybackState {
   videoId: string | null;
+  source: string;
   trackName: string;
   artistName: string;
   image: string;
@@ -37,6 +38,7 @@ export interface PlaybackState {
 
 export interface RecentTrack {
   videoId: string;
+  source: string;
   trackName: string;
   artistName: string;
   image: string;
@@ -98,6 +100,7 @@ export class RoomManager {
     const tl = await this.store.getTimeline(code);
     return {
       videoId: tl.videoId,
+      source: tl.source,
       trackName: tl.trackName,
       artistName: tl.artistName,
       image: tl.image,
@@ -223,6 +226,7 @@ export async function setPlayback(code: string, state: Partial<PlaybackState> & 
   const tl = await legacyManager.getTimeline(code);
   const next: Partial<TimelineState> = {};
   if (state.videoId !== undefined) next.videoId = state.videoId;
+  if (state.source !== undefined) next.source = state.source;
   if (state.trackName !== undefined) next.trackName = state.trackName;
   if (state.artistName !== undefined) next.artistName = state.artistName;
   if (state.image !== undefined) next.image = state.image;

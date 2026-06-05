@@ -13,6 +13,7 @@ import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { YtMusicSearchProvider } from "./lib/searchProvider.js";
 import { YtDlpResolver } from "./lib/audioResolver.js";
+import { resolveJioSaavn } from "./lib/jiosaavnAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
 
 const getCorsOrigins = (): string[] => {
@@ -124,6 +125,37 @@ app.get("/api/resolve/:videoId", async (c) => {
     return c.json(result);
   } catch (err) {
     console.error(`[Resolve] error for ${videoId}:`, err);
+    return c.json({ error: "Resolution failed" }, 500);
+  }
+});
+
+app.post("/api/resolve", async (c) => {
+  let body: { videoId?: string; name?: string; artists?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (!body.videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
+
+  const ip = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? "unknown";
+  const rl = await checkRateLimit(`resolve:${ip}`, 60);
+  if (!rl.success) {
+    return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
+  }
+
+  if (body.name?.trim()) {
+    const jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists);
+    if (jioResult) return c.json(jioResult);
+  }
+
+  try {
+    const result = await audioResolver.resolve(body.videoId);
+    if (!result) return c.json({ error: "Failed to resolve audio" }, 502);
+    return c.json({ ...result, source: "youtube" });
+  } catch (err) {
+    console.error(`[Resolve] error for ${body.videoId}:`, err);
     return c.json({ error: "Resolution failed" }, 500);
   }
 });

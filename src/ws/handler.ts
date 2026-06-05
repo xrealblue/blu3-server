@@ -37,12 +37,12 @@ import { pushTrackHistory } from "../db/trackHistory.js";
 
 export type WSMessage =
   | { type: "clock_sync"; serverTime: number }
-  | { type: "play"; videoId: string; seekTo: number; serverTime: number; anchorServerTime: number; id?: string; trackName?: string; artistName?: string; image?: string; duration_ms?: number; recentTracks?: any[] }
+  | { type: "play"; videoId: string; source: string; seekTo: number; serverTime: number; anchorServerTime: number; id?: string; trackName?: string; artistName?: string; image?: string; duration_ms?: number; recentTracks?: any[] }
   | { type: "pause"; serverTime: number; anchorServerTime: number; positionMs: number }
   | { type: "seek"; seekTo: number; serverTime: number; anchorServerTime: number };
 
 type IncomingMessage =
-  | { type: "playback:play"; id?: string; videoId: string; trackName?: string; artistName?: string; image?: string; currentTime?: number; duration_ms?: number }
+  | { type: "playback:play"; id?: string; source?: string; videoId: string; trackName?: string; artistName?: string; image?: string; currentTime?: number; duration_ms?: number }
   | { type: "playback:pause"; currentTime?: number }
   | { type: "playback:seek"; currentTime?: number }
   | { type: "playback:ended"; currentTime?: number }
@@ -183,6 +183,7 @@ export async function handleWS(ws: any, url: URL) {
 
   const loadedQueue: QueueTrack[] = queueFromDb.map((item) => ({
     id: item.id,
+    source: "youtube",
     videoId: item.videoId,
     name: item.trackName,
     artists: [{ name: item.artistName }],
@@ -284,8 +285,11 @@ export async function handleWS(ws: any, url: URL) {
             if (oldTrack) await moveQueueTrackToEnd(roomCode, oldTrack.id);
           }
 
+          const source = msg.source ?? "youtube";
+
           await setPlayback(roomCode, {
             videoId: msg.videoId,
+            source,
             trackName: msg.trackName ?? "",
             artistName: msg.artistName ?? "",
             image: msg.image ?? "",
@@ -297,6 +301,7 @@ export async function handleWS(ws: any, url: URL) {
           if (msg.videoId) {
             await insertQueueTop(roomCode, {
               id: msg.id || `room-${msg.videoId}`,
+              source,
               videoId: msg.videoId,
               name: msg.trackName ?? "",
               artists: [{ name: msg.artistName ?? "" }],
@@ -312,6 +317,7 @@ export async function handleWS(ws: any, url: URL) {
           broadcast(roomCode, {
             type: "play",
             videoId: msg.videoId,
+            source,
             seekTo,
             serverTime: serverNow,
             anchorServerTime: serverNow,
@@ -405,6 +411,7 @@ export async function handleWS(ws: any, url: URL) {
           if (nextTrack) {
             await setPlayback(roomCode, {
               videoId: nextTrack.videoId,
+              source: nextTrack.source ?? "youtube",
               trackName: nextTrack.name,
               artistName: nextTrack.artists?.[0]?.name ?? "",
               image: nextTrack.image ?? "",
@@ -416,6 +423,7 @@ export async function handleWS(ws: any, url: URL) {
             broadcast(roomCode, {
               type: "play",
               videoId: nextTrack.videoId,
+              source: nextTrack.source ?? "youtube",
               seekTo: 0,
               serverTime: serverNow,
               anchorServerTime: serverNow,

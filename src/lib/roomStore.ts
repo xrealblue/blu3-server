@@ -2,6 +2,7 @@ import { getRedis } from "./redis.js";
 
 export interface TimelineState {
   videoId: string | null;
+  source: string;
   trackName: string;
   artistName: string;
   image: string;
@@ -21,6 +22,7 @@ export interface MemberInfo {
 
 export interface QueueTrack {
   id: string;
+  source: string;
   videoId: string;
   name: string;
   artists: { name: string }[];
@@ -33,6 +35,7 @@ export const ROOM_IDLE_TTL = 600;
 export function defaultTimeline(): TimelineState {
   return {
     videoId: null,
+    source: "youtube",
     trackName: "",
     artistName: "",
     image: "",
