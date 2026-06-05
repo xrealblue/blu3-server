@@ -13,7 +13,6 @@ import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import { handleWS } from "./ws/handler.js";
 import { YtMusicSearchProvider } from "./lib/searchProvider.js";
-import { YtDlpResolver } from "./lib/audioResolver.js";
 import { resolveJioSaavn } from "./lib/jiosaavnAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
 
@@ -109,7 +108,6 @@ app.get(
 );
 
 const searchProvider = new YtMusicSearchProvider();
-const audioResolver = new YtDlpResolver();
 
 app.get("/api/search", async (c) => {
   const q = c.req.query("q");
@@ -127,26 +125,6 @@ app.get("/api/search", async (c) => {
   } catch (err) {
     console.error("Search error:", err);
     return c.json({ error: "Search failed" }, 500);
-  }
-});
-
-app.get("/api/resolve/:videoId", async (c) => {
-  const videoId = c.req.param("videoId");
-  if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
-
-  const ip = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? "unknown";
-  const rl = await checkRateLimit(`resolve:${ip}`, 60);
-  if (!rl.success) {
-    return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
-  }
-
-  try {
-    const result = await audioResolver.resolve(videoId);
-    if (!result) return c.json({ error: "Failed to resolve audio" }, 502);
-    return c.json(result);
-  } catch (err) {
-    console.error(`[Resolve] error for ${videoId}:`, err);
-    return c.json({ error: "Resolution failed" }, 500);
   }
 });
 
@@ -178,32 +156,6 @@ app.post("/api/resolve", async (c) => {
   }
 
   return c.json({ source: "youtube", videoId: body.videoId });
-});
-
-app.get("/api/ytdl/:videoId", async (c) => {
-  const payload = await verifyAuth(c);
-  if (!payload) return c.json({ error: "Unauthorized" }, 401);
-
-  const videoId = c.req.param("videoId");
-  if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
-
-  const ip = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? "unknown";
-  const rl = await checkRateLimit(`ytdl:${ip}`, 60);
-  if (!rl.success) {
-    return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
-  }
-
-  try {
-    const result = await audioResolver.resolve(videoId);
-    if (!result) return c.json({ error: "Failed to resolve audio" }, 502);
-    if (result.url) {
-      audioCache.set(videoId, { cdnUrl: result.url, fetchedAt: Date.now() });
-    }
-    return c.json(result);
-  } catch (err) {
-    console.error(`[Ytdl] error for ${videoId}:`, err);
-    return c.json({ error: "Resolution failed" }, 500);
-  }
 });
 
 app.get("/api/audio/:videoId", async (c) => {
