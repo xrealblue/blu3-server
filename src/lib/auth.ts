@@ -19,6 +19,9 @@ export const auth = betterAuth({
     },
   }),
   plugins: [dash()],
+  account: {
+    skipStateCookieCheck: true,
+  },
   accountLinking: {
     trustedProviders: true,
   },

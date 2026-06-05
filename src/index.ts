@@ -183,7 +183,25 @@ app.post("/api/resolve", async (c) => {
 });
 
 app.get("/api/audio/:videoId", async (c) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  let session = await getSessionFromRequest(c.req.raw.headers);
+  if (!session) {
+    const token = c.req.query("token");
+    if (token) {
+      const [s] = await db
+        .select()
+        .from(schema.sessions)
+        .where(eq(schema.sessions.token, token))
+        .limit(1);
+      if (s && s.expiresAt > new Date()) {
+        const [user] = await db
+          .select()
+          .from(schema.users)
+          .where(eq(schema.users.id, s.userId))
+          .limit(1);
+        if (user) session = { user, session: s };
+      }
+    }
+  }
   if (!session) return c.json({ error: "Unauthorized" }, 401);
 
   const videoId = c.req.param("videoId");
