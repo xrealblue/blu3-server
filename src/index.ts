@@ -172,6 +172,9 @@ app.post("/api/resolve", async (c) => {
   try {
     const result = await audioResolver.resolve(body.videoId);
     if (!result) return c.json({ error: "Failed to resolve audio" }, 502);
+    if (result.url) {
+      audioCache.set(body.videoId, { cdnUrl: result.url, fetchedAt: Date.now() });
+    }
     return c.json({ ...result, source: "youtube" });
   } catch (err) {
     console.error(`[Resolve] error for ${body.videoId}:`, err);
