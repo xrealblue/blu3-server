@@ -30,6 +30,12 @@ import {
   createSeekSnapshot,
 } from "../lib/timeline.js";
 import { nanoid } from "nanoid";
+
+const MAX_SEEK_SEC = 3600;
+function clampTime(v: number | undefined | null, max = MAX_SEEK_SEC): number {
+  const n = Number(v ?? 0);
+  return Number.isFinite(n) ? Math.max(0, Math.min(n, max)) : 0;
+}
 import { db } from "../db/index.js";
 import { rooms, roomQueue } from "../db/schema.js";
 import { eq, asc, sql } from "drizzle-orm";
@@ -38,7 +44,7 @@ import { pushTrackHistory } from "../db/trackHistory.js";
 export type WSMessage =
   | { type: "clock_sync"; serverTime: number }
   | { type: "play"; videoId: string; source: string; seekTo: number; serverTime: number; anchorServerTime: number; id?: string; trackName?: string; artistName?: string; image?: string; duration_ms?: number; recentTracks?: any[] }
-  | { type: "pause"; serverTime: number; anchorServerTime: number; positionMs: number }
+  | { type: "pause"; serverTime: number; anchorServerTime: number; positionSec: number }
   | { type: "seek"; seekTo: number; serverTime: number; anchorServerTime: number };
 
 type IncomingMessage =
