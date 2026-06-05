@@ -231,9 +231,9 @@ export async function setPlayback(code: string, state: Partial<PlaybackState> & 
   if (state.artistName !== undefined) next.artistName = state.artistName;
   if (state.image !== undefined) next.image = state.image;
   if (state.isPlaying !== undefined) next.isPlaying = state.isPlaying;
-  if (state.currentTime !== undefined) next.positionMs = state.currentTime;
+  if (state.currentTime !== undefined) next.positionSec = state.currentTime;
   if (state.updatedAt !== undefined) next.anchorServerTime = state.updatedAt;
-  if (next.isPlaying !== undefined || next.positionMs !== undefined || next.anchorServerTime !== undefined) {
+  if (next.isPlaying !== undefined || next.positionSec !== undefined || next.anchorServerTime !== undefined) {
     next.anchorServerTime = state.updatedAt ?? Date.now();
   }
   await legacyManager.setTimeline(code, next);
