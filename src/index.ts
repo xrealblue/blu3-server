@@ -177,17 +177,7 @@ app.post("/api/resolve", async (c) => {
     }
   }
 
-  try {
-    const result = await audioResolver.resolve(body.videoId);
-    if (!result) return c.json({ error: "Failed to resolve audio" }, 502);
-    if (result.url) {
-      audioCache.set(body.videoId, { cdnUrl: result.url, fetchedAt: Date.now() });
-    }
-    return c.json({ ...result, source: "youtube" });
-  } catch (err) {
-    console.error(`[Resolve] error for ${body.videoId}:`, err);
-    return c.json({ error: "Resolution failed" }, 500);
-  }
+  return c.json({ source: "youtube", videoId: body.videoId });
 });
 
 app.get("/api/ytdl/:videoId", async (c) => {
@@ -229,11 +219,9 @@ app.get("/api/audio/:videoId", async (c) => {
   if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
 
   const cached = audioCache.get(videoId);
-  if (!cached) return c.json({ error: "Audio not found" }, 404);
-
-  if (Date.now() - cached.fetchedAt > CACHE_TTL) {
+  if (!cached || Date.now() - cached.fetchedAt > CACHE_TTL) {
     audioCache.delete(videoId);
-    return c.json({ error: "Audio expired" }, 404);
+    return c.json({ error: "Audio not found or expired" }, 404);
   }
 
   try {
@@ -245,7 +233,7 @@ app.get("/api/audio/:videoId", async (c) => {
     });
     if (!cdnRes.ok && cdnRes.status !== 206) {
       audioCache.delete(videoId);
-      return c.json({ error: "Source unavailable" }, 502);
+      return c.json({ error: "Source unavailable" }, 404);
     }
 
     const responseHeaders: Record<string, string> = {};
@@ -260,7 +248,8 @@ app.get("/api/audio/:videoId", async (c) => {
     return c.newResponse(cdnRes.body as any, cdnRes.status as any, responseHeaders);
   } catch (err) {
     console.error(`[AudioProxy] error for ${videoId}:`, err);
-    return c.json({ error: "Proxy failed" }, 502);
+    audioCache.delete(videoId);
+    return c.json({ error: "Proxy failed" }, 404);
   }
 });
 
