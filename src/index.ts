@@ -1,6 +1,5 @@
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
-import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import * as dotenv from "dotenv";
 import { existsSync } from "fs";
@@ -42,16 +41,33 @@ const getCorsOrigins = (): string[] => {
 
 const app = new Hono();
 
+const corsOrigins = getCorsOrigins();
+
 app.use("*", logger());
-app.use(
-  "*",
-  cors({
-    origin: getCorsOrigins(),
-    allowMethods: ["GET", "POST", "DELETE", "OPTIONS", "PUT"],
-    allowHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
-  }),
-);
+
+app.use("*", async (c, next) => {
+  const origin = c.req.header("origin") || "";
+  const isAllowed = corsOrigins.includes(origin);
+
+  if (c.req.method === "OPTIONS") {
+    if (isAllowed) {
+      c.header("Access-Control-Allow-Origin", origin);
+      c.header("Access-Control-Allow-Credentials", "true");
+      c.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS, PUT");
+      c.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    }
+    c.header("Vary", "Origin");
+    return c.body(null, 204);
+  }
+
+  await next();
+
+  if (isAllowed) {
+    c.res.headers.set("Access-Control-Allow-Origin", origin);
+    c.res.headers.set("Access-Control-Allow-Credentials", "true");
+  }
+  c.res.headers.set("Vary", "Origin");
+});
 
 app.get("/", (c) => c.json({ status: "ok", service: "blu3-api" }));
 app.get("/healthz", (c) => c.json({ status: "ok" }));
