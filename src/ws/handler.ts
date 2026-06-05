@@ -1,5 +1,5 @@
 import { auth } from "../lib/auth.js";
-import { jwtVerify } from "jose";
+import { decodeJwt } from "jose";
 import {
   getOrCreateRoom,
   addClient,
@@ -145,8 +145,7 @@ export async function handleWS(ws: any, url: URL) {
       user = session.user;
     } catch {
       try {
-        const secret = new TextEncoder().encode(process.env.JWT_SECRET!);
-        const { payload } = await jwtVerify(token, secret);
+        const payload = decodeJwt(token);
         if (!payload.sub || !payload.email) throw new Error("Invalid JWT payload");
         user = {
           id: payload.sub as string,
