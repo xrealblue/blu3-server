@@ -111,7 +111,7 @@ export const roomTrackHistory = pgTable(
 export const roomQueue = pgTable(
   "room_queue",
   {
-    id: text("id").primaryKey(),
+    id: text("id").primaryKey().default(sql`gen_random_uuid()`),
     roomId: text("room_id")
       .notNull()
       .references(() => rooms.id, { onDelete: "cascade" }),
@@ -136,7 +136,7 @@ export type RoomMember = typeof roomMembers.$inferSelect;
 export type RoomQueue = typeof roomQueue.$inferSelect;
 
 export const playlists = pgTable("playlists", {
-  id: text("id").primaryKey(),
+  id: text("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: text("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
@@ -148,7 +148,7 @@ export const playlists = pgTable("playlists", {
 export const playlistTracks = pgTable(
   "playlist_tracks",
   {
-    id: text("id").primaryKey(),
+    id: text("id").primaryKey().default(sql`gen_random_uuid()`),
     playlistId: text("playlist_id")
       .notNull()
       .references(() => playlists.id, { onDelete: "cascade" }),
