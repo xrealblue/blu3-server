@@ -61,7 +61,8 @@ type IncomingMessage =
   | { type: "queue:cycle_current"; trackId: string }
   | { type: "queue:clear" };
 
-function canControlPlayback(roomCode: string, hostId: string, userId: string) {
+function canControlPlayback(roomCode: string, hostId: string, userId: string, userRole?: string) {
+  if (userRole === "admin") return true;
   const isHostActive = isHostInRoom(roomCode);
   return !isHostActive || hostId === userId;
 }
@@ -152,6 +153,7 @@ export async function handleWS(ws: any, url: URL) {
           name: (payload.name as string) ?? (payload.email as string),
           email: payload.email as string,
           image: (payload.avatar as string) ?? null,
+          role: "user",
         };
       } catch (jwtErr) {
         console.error("WS auth error:", jwtErr);
@@ -276,7 +278,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "playback:play": {
-          if (!canControlPlayback(roomCode, room.hostId, user.id)) return;
+          if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
           if (!msg.videoId) return;
 
           const seekTo = clampTime(msg.currentTime);
@@ -341,7 +343,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "playback:pause": {
-          if (!canControlPlayback(roomCode, room.hostId, user.id)) return;
+          if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
 
           const currentTl = await getPlayback(roomCode);
           const pauseSnapshot = createPauseSnapshot(
@@ -372,7 +374,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "playback:seek": {
-          if (!canControlPlayback(roomCode, room.hostId, user.id)) return;
+          if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
 
           const seekTo = clampTime(msg.currentTime);
 
@@ -390,7 +392,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "playback:ended": {
-          if (!canControlPlayback(roomCode, room.hostId, user.id)) return;
+          if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
           const currentPlayback = await getPlayback(roomCode);
           if (!currentPlayback?.videoId) return;
 
@@ -429,7 +431,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "playback:mode": {
-          if (!canControlPlayback(roomCode, room.hostId, user.id)) return;
+          if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
           const mode = await getPlaybackMode(roomCode);
           const next = {
             ...mode,
@@ -470,7 +472,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "queue:cycle_current": {
-          if (!canControlPlayback(roomCode, room.hostId, user.id)) return;
+          if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
           await moveQueueTrackToEnd(roomCode, msg.trackId);
           broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
           scheduleQueueSync(dbRoom.id, roomCode);

@@ -109,8 +109,15 @@ roomsRoute.delete("/:code", requireAuth, async (c) => {
     .where(eq(rooms.code, code))
     .limit(1);
   if (!room) return c.json({ error: "Room not found" }, 404);
-  if (room.hostId !== userId)
-    return c.json({ error: "Only host can delete room" }, 403);
+  if (room.hostId !== userId) {
+    const [userRec] = await db
+      .select({ role: users.role })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!userRec || userRec.role !== "admin")
+      return c.json({ error: "Only host can delete room" }, 403);
+  }
 
   await db.delete(rooms).where(eq(rooms.id, room.id));
   return c.json({ success: true });
