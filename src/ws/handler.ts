@@ -1,4 +1,5 @@
 import { auth } from "../lib/auth.js";
+import { jwtVerify } from "jose";
 import {
   getOrCreateRoom,
   addClient,
@@ -142,13 +143,25 @@ export async function handleWS(ws: any, url: URL) {
       });
       if (!session?.user) throw new Error("No session");
       user = session.user;
-      sessionCache.set(token, { user, expiresAt: Date.now() + 5 * 60 * 1000 });
-    } catch (err) {
-      console.error("WS auth error:", err);
-      ws.send(JSON.stringify({ type: "error", message: "Invalid token" }));
-      ws.close();
-      return null;
+    } catch {
+      try {
+        const secret = new TextEncoder().encode(process.env.JWT_SECRET!);
+        const { payload } = await jwtVerify(token, secret);
+        if (!payload.sub || !payload.email) throw new Error("Invalid JWT payload");
+        user = {
+          id: payload.sub as string,
+          name: (payload.name as string) ?? (payload.email as string),
+          email: payload.email as string,
+          image: (payload.avatar as string) ?? null,
+        };
+      } catch (jwtErr) {
+        console.error("WS auth error:", jwtErr);
+        ws.send(JSON.stringify({ type: "error", message: "Invalid token" }));
+        ws.close();
+        return null;
+      }
     }
+    sessionCache.set(token, { user, expiresAt: Date.now() + 5 * 60 * 1000 });
   }
 
   const socketId = nanoid();
