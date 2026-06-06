@@ -21,10 +21,10 @@ export const auth = betterAuth({
   plugins: [dash()],
   account: {
     storeStateStrategy: "cookie",
-  },
-  accountLinking: {
-    trustedProviders: true,
-    requireLocalEmailVerified: false,
+    accountLinking: {
+      trustedProviders: ["google", "discord"],
+      requireLocalEmailVerified: false,
+    },
   },
   socialProviders: {
     google: {
