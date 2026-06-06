@@ -20,7 +20,7 @@ export const auth = betterAuth({
   }),
   plugins: [dash()],
   account: {
-    skipStateCookieCheck: true,
+    storeStateStrategy: "cookie",
   },
   accountLinking: {
     trustedProviders: true,
