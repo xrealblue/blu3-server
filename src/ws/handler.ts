@@ -466,6 +466,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "queue:remove": {
+          if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
           await removeFromQueue(roomCode, msg.trackId);
           broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
           scheduleQueueSync(dbRoom.id, roomCode);
@@ -479,6 +480,7 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "queue:clear": {
+          if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
           await clearQueue(roomCode);
           broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
           scheduleQueueSync(dbRoom.id, roomCode);
