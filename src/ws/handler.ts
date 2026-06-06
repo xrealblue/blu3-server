@@ -24,23 +24,18 @@ import {
   getPlayback,
   setPlayback,
 } from "./roomManager.js";
-import {
-  currentPosition,
-  createPlaySnapshot,
-  createPauseSnapshot,
-  createSeekSnapshot,
-} from "../lib/timeline.js";
+import { createPauseSnapshot } from "../lib/timeline.js";
 import { nanoid } from "nanoid";
+import { db } from "../db/index.js";
+import { rooms, roomQueue } from "../db/schema.js";
+import { eq, asc, sql } from "drizzle-orm";
+import { pushTrackHistory } from "../db/trackHistory.js";
 
 const MAX_SEEK_SEC = 3600;
 function clampTime(v: number | undefined | null, max = MAX_SEEK_SEC): number {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? Math.max(0, Math.min(n, max)) : 0;
 }
-import { db } from "../db/index.js";
-import { rooms, roomQueue } from "../db/schema.js";
-import { eq, asc, sql } from "drizzle-orm";
-import { pushTrackHistory } from "../db/trackHistory.js";
 
 export type WSMessage =
   | { type: "clock_sync"; serverTime: number }
@@ -259,8 +254,6 @@ export async function handleWS(ws: any, url: URL) {
       } catch {
         return;
       }
-
-      console.log(`[WS] ${user.name}: ${msg.type}`, JSON.stringify(msg).slice(0, 200));
 
       const serverNow = Date.now();
 
