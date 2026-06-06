@@ -82,7 +82,6 @@ app.get("/healthz", (c) => c.json({ status: "ok" }));
 app.get("/readyz", async (c) => {
   const issues: string[] = [];
   try {
-    const { db } = await import("./db/index.js");
     await db.execute("SELECT 1");
   } catch {
     issues.push("db");
