@@ -21,7 +21,7 @@ export class LocalBroadcaster implements Broadcaster {
     if (!sockets) return;
     for (const [id, entry] of sockets) {
       if (id === excludeSocketId) continue;
-      try { entry.send(data); } catch { /* ignore */ }
+      try { entry.send(data); } catch {}
     }
   }
 

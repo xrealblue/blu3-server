@@ -88,8 +88,6 @@ export const roomMembers = pgTable("room_members", {
   joinedAt: timestamp("joined_at").defaultNow().notNull(),
 });
 
-// db/schema.ts — add this table
-
 export const roomTrackHistory = pgTable(
   "room_track_history",
   {

@@ -39,7 +39,6 @@ export async function cacheSet(
     if (ttlSeconds) await r.setex(key, ttlSeconds, JSON.stringify(value));
     else await r.set(key, JSON.stringify(value));
   } catch {
-    /* silently fail — in-memory fallback below handles it */
   }
 }
 
@@ -49,7 +48,6 @@ export async function cacheDel(key: string): Promise<void> {
   try {
     await r.del(key);
   } catch {
-    /* ignore */
   }
 }
 
