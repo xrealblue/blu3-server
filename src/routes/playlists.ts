@@ -413,7 +413,7 @@ playlistsRoute.get("/", async (c) => {
           .where(eq(playlistTracks.playlistId, pl.id))
           .orderBy(asc(playlistTracks.position));
 
-        const coverImage = tracks.find((t) => t.image)?.image || "";
+        const coverImage = pl.isLiked ? "/queue/finalheart.jpg" : (tracks.find((t) => t.image)?.image || "");
         return {
           ...pl,
           coverImage,
