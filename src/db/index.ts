@@ -1,7 +1,4 @@
-import * as dotenv from "dotenv";
-import { existsSync } from "fs";
-dotenv.config();
-if (existsSync(".env.private")) dotenv.config({ path: ".env.private" });
+import "../lib/env.js";
 
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";

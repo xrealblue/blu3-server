@@ -1,10 +1,8 @@
+import "./lib/env.js";
+
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
 import { logger } from "hono/logger";
-import * as dotenv from "dotenv";
-import { existsSync } from "fs";
-dotenv.config();
-if (existsSync(".env.private")) dotenv.config({ path: ".env.private" });
 import { WebSocketServer } from "ws";
 import { auth, getSessionFromRequest } from "./lib/auth.js";
 import { db } from "./db/index.js";
