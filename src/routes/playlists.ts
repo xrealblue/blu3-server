@@ -23,7 +23,6 @@ const requireAuth: MiddlewareHandler<PlaylistsEnv> = async (c, next) => {
 
 playlistsRoute.use("*", requireAuth);
 
-// ISO 8601 duration parser (PT3M45S -> milliseconds)
 function parseISO8601Duration(duration: string): number {
   const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
   if (!match) return 0;
@@ -33,7 +32,6 @@ function parseISO8601Duration(duration: string): number {
   return ((hours * 60 + minutes) * 60 + seconds) * 1000;
 }
 
-// Chunking utility for API rate limit protection
 function chunkArray<T>(array: T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let i = 0; i < array.length; i += size) {
@@ -42,7 +40,6 @@ function chunkArray<T>(array: T[], size: number): T[][] {
   return chunks;
 }
 
-// Spotify Client Credentials Flow Token Generator
 async function getSpotifyAccessToken(clientId: string, clientSecret: string): Promise<string | null> {
   try {
     const res = await fetch("https://accounts.spotify.com/api/token", {
@@ -258,8 +255,6 @@ async function resolveTrackToJioSaavn(
   return { videoId: "", image: "", durationMs: 0 };
 }
 
-// ── JioSaavn Playlist Import ──
-
 interface JioSaavnPlaylistTrack {
   id: string;
   title: string;
@@ -312,7 +307,7 @@ async function getJioSaavnPlaylistTracks(url: string): Promise<{ name: string; t
   }
 }
 
-// ── YouTube Playlist Import (scrapes ytInitialData, no API key needed) ──
+// ── YouTube Playlist Import ──
 
 interface YouTubePlaylistTrack {
   title: string;
@@ -376,7 +371,7 @@ async function getYouTubePlaylistTracks(url: string): Promise<{ name: string; tr
 
 // ── ENDPOINTS ──
 
-// GET /api/playlists — Fetch all playlists for current user (Self-Healing "Liked Songs")
+// GET /api/playlists — Fetch all playlists for current user
 playlistsRoute.get("/", async (c) => {
   const userId = c.get("userId");
   const cacheKey = `playlists:${userId}`;
@@ -389,7 +384,6 @@ playlistsRoute.get("/", async (c) => {
       .where(eq(playlists.userId, userId))
       .orderBy(asc(playlists.createdAt));
 
-    // Self-healing check: Ensure "Liked Songs" exists
     const hasLiked = userPlaylists.some((p) => p.isLiked);
     if (!hasLiked) {
       const [likedPlaylist] = await db
@@ -404,7 +398,6 @@ playlistsRoute.get("/", async (c) => {
       userPlaylists = [likedPlaylist, ...userPlaylists];
     }
 
-    // Enrich each playlist with coverImage (first track image) and trackCount
     const enriched = await Promise.all(
       userPlaylists.map(async (pl) => {
         const tracks = await db
@@ -442,7 +435,6 @@ playlistsRoute.get("/liked/ids", async (c) => {
       .limit(1);
 
     if (!likedPlaylist) {
-      // Auto-create if not found
       [likedPlaylist] = await db
         .insert(playlists)
         .values({
@@ -545,7 +537,6 @@ playlistsRoute.post("/liked/toggle", async (c) => {
   if (!videoId) return c.json({ error: "videoId is required" }, 400);
 
   try {
-    // 1. Get or create Liked Songs playlist
     let [likedPlaylist] = await db
       .select()
       .from(playlists)
@@ -563,7 +554,6 @@ playlistsRoute.post("/liked/toggle", async (c) => {
         .returning();
     }
 
-    // 2. Check if track is already in this playlist
     const [existingTrack] = await db
       .select()
       .from(playlistTracks)
@@ -571,11 +561,9 @@ playlistsRoute.post("/liked/toggle", async (c) => {
       .limit(1);
 
     if (existingTrack) {
-      // Unlike: remove it
       await db.delete(playlistTracks).where(eq(playlistTracks.id, existingTrack.id));
       return c.json({ liked: false });
     } else {
-      // Like: append it
       const [maxPos] = await db
         .select({ pos: playlistTracks.position })
         .from(playlistTracks)
@@ -784,7 +772,6 @@ playlistsRoute.post("/import", async (c) => {
         try {
           const accessToken = await getSpotifyAccessToken(clientId, clientSecret);
           if (accessToken) {
-            // Fetch playlist details
             const spotifyRes = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}`, {
               headers: { Authorization: `Bearer ${accessToken}` },
             });
@@ -831,7 +818,6 @@ playlistsRoute.post("/import", async (c) => {
 
       const tracksToInsert: any[] = [];
 
-      // Concurrently resolve tracks in chunks of 5
       const chunks = chunkArray(tracksToResolve, 5);
       let positionCounter = 0;
 

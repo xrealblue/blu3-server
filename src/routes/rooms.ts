@@ -28,7 +28,6 @@ roomsRoute.post("/", requireAuth, async (c) => {
   const { name } = await c.req.json();
   if (!name?.trim()) return c.json({ error: "Room name required" }, 400);
 
-  // Fetch the host's name to satisfy the NOT NULL hostName column
   const [user] = await db
     .select({ name: users.name })
     .from(users)
