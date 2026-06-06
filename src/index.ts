@@ -72,7 +72,14 @@ app.use("*", async (c, next) => {
   c.res.headers.set("Vary", "Origin");
 });
 
-app.get("/", (c) => c.json({ status: "ok", service: "blu3-api" }));
+app.get("/", (c) => {
+  const error = c.req.query("error");
+  if (error) {
+    const frontendUrl = (process.env.FRONTEND_URL?.split(",")[0]?.trim()) || "https://blu3.in";
+    return c.redirect(`${frontendUrl}/?error=${encodeURIComponent(error)}`);
+  }
+  return c.json({ status: "ok", service: "blu3-api" });
+});
 app.get("/healthz", (c) => c.json({ status: "ok" }));
 app.get("/readyz", async (c) => {
   const issues: string[] = [];
