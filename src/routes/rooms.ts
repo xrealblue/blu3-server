@@ -52,6 +52,30 @@ roomsRoute.post("/", requireAuth, async (c) => {
   return c.json({ room });
 });
 
+// GET /api/rooms/:code/og — public endpoint for OG image data
+roomsRoute.get("/:code/og", async (c) => {
+  const code = c.req.param("code").toUpperCase();
+
+  const [room] = await db
+    .select({ hostName: rooms.hostName, hostId: rooms.hostId, name: rooms.name })
+    .from(rooms)
+    .where(eq(rooms.code, code))
+    .limit(1);
+  if (!room) return c.json({ hostName: "", hostImage: "", roomName: "" });
+
+  let hostImage = "";
+  if (room.hostId) {
+    const [user] = await db
+      .select({ image: users.image })
+      .from(users)
+      .where(eq(users.id, room.hostId))
+      .limit(1);
+    hostImage = user?.image || "";
+  }
+
+  return c.json({ hostName: room.hostName, hostImage, roomName: room.name });
+});
+
 roomsRoute.get("/:code", requireAuth, async (c) => {
   const code = c.req.param("code").toUpperCase();
 
