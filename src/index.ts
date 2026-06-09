@@ -3,6 +3,7 @@ import "./lib/env.js";
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
 import { logger } from "hono/logger";
+import { getCookie } from "hono/cookie";
 import { WebSocketServer } from "ws";
 import { auth, getSessionFromRequest } from "./lib/auth.js";
 import { db } from "./db/index.js";
@@ -95,6 +96,24 @@ app.get("/readyz", async (c) => {
   }
   if (issues.length > 0) return c.json({ status: "degraded", issues }, 503);
   return c.json({ status: "ok" });
+});
+
+// ─── Desktop OAuth Redirect ─────────────────────────────────────────────────
+// After Google/Discord auth completes, better-auth sets a session cookie and
+// redirects here. We read the session token from the cookie and redirect to
+// the blu3:// custom protocol so the Electron app can pick up the session.
+app.get("/api/auth/desktop-redirect", async (c) => {
+  const sessionToken =
+    getCookie(c, "better-auth.session_token") ||
+    getCookie(c, "__Secure-better-auth.session_token") ||
+    "";
+
+  if (sessionToken) {
+    return c.redirect(`blu3://auth-callback?token=${encodeURIComponent(sessionToken)}`);
+  }
+
+  const frontendUrl = (process.env.FRONTEND_URL?.split(",")[0]?.trim()) || "https://blu3.in";
+  return c.redirect(`${frontendUrl}/?error=auth_failed`);
 });
 
 app.on(["GET", "POST"], "/api/auth/*", async (c) => {

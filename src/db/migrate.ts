@@ -1,15 +1,16 @@
 import "../lib/env.js";
 
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
-import { migrate } from "drizzle-orm/neon-http/migrator";
+import postgres from "postgres";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { migrate } from "drizzle-orm/postgres-js/migrator";
 
-const sql = neon(process.env.DATABASE_URL!);
+const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
 const db = drizzle(sql);
 
 async function main() {
   console.log("Running migrations...");
   await migrate(db, { migrationsFolder: "./drizzle" });
   console.log("Done.");
+  await sql.end();
 }
 main().catch(console.error);

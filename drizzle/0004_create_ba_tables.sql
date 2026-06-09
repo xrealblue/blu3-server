@@ -9,6 +9,18 @@ CREATE TABLE IF NOT EXISTS "verification" (
 );
 --> statement-breakpoint
 
+-- Better Auth: create user table (if not exists as "user" - might already be "users" from old schema)
+CREATE TABLE IF NOT EXISTS "user" (
+  "id" text PRIMARY KEY NOT NULL,
+  "email" text NOT NULL UNIQUE,
+  "email_verified" boolean DEFAULT false NOT NULL,
+  "name" text NOT NULL,
+  "image" text,
+  "created_at" timestamp NOT NULL,
+  "updated_at" timestamp NOT NULL
+);
+--> statement-breakpoint
+
 -- Better Auth: create session table
 CREATE TABLE IF NOT EXISTS "session" (
   "id" text PRIMARY KEY NOT NULL,
@@ -35,18 +47,6 @@ CREATE TABLE IF NOT EXISTS "account" (
   "refresh_token_expires_at" timestamp,
   "scope" text,
   "password" text,
-  "created_at" timestamp NOT NULL,
-  "updated_at" timestamp NOT NULL
-);
---> statement-breakpoint
-
--- Better Auth: create user table (if not exists as "user" - might already be "users" from old schema)
-CREATE TABLE IF NOT EXISTS "user" (
-  "id" text PRIMARY KEY NOT NULL,
-  "email" text NOT NULL UNIQUE,
-  "email_verified" boolean DEFAULT false NOT NULL,
-  "name" text NOT NULL,
-  "image" text,
   "created_at" timestamp NOT NULL,
   "updated_at" timestamp NOT NULL
 );
