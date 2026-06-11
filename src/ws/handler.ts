@@ -420,7 +420,11 @@ export async function handleWS(ws: any, url: URL) {
           );
           if (endedTrack) await moveQueueTrackToEnd(roomCode, endedTrack.id);
 
-          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
+          broadcast(roomCode, {
+            type: "room:queue_update",
+            queue: await getQueue(roomCode),
+            recentTracks: getRecentTracks(roomCode),
+          });
 
           await setPlayback(roomCode, {
             isPlaying: false,
