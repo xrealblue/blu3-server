@@ -50,6 +50,7 @@ type IncomingMessage =
   | { type: "playback:ended"; currentTime?: number }
   | { type: "playback:mode"; shuffle?: boolean; repeatMode?: RepeatMode }
   | { type: "playback:sync_request" }
+  | { type: "clock_sync_request" }
   | { type: "chat:send"; text: string }
   | { type: "queue:add"; track: QueueTrack }
   | { type: "queue:remove"; trackId: string }
@@ -258,6 +259,13 @@ export async function handleWS(ws: any, url: URL) {
       const serverNow = Date.now();
 
       switch (msg.type) {
+        case "clock_sync_request": {
+          ws.send(JSON.stringify({
+            type: "clock_sync",
+            serverTime: Date.now(),
+          }));
+          break;
+        }
         case "chat:send": {
           const chatMsg: ChatMessage = {
             id: nanoid(),
