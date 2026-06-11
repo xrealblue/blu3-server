@@ -185,6 +185,7 @@ export async function handleWS(ws: any, url: URL) {
 
   const room = getOrCreateRoom(roomCode, dbRoom.hostId);
   await addClient(client);
+  console.log(`ws. ${user.email ?? user.name ?? user.id} connected`);
 
   const queueFromDb = await db
     .select()
@@ -511,6 +512,7 @@ export async function handleWS(ws: any, url: URL) {
             isHostActive: false,
           });
         }
+        console.log(`ws. ${user.email ?? user.name ?? user.id} disconnected`);
       } catch (err) {
         console.error("[WS] onClose error:", err);
       }

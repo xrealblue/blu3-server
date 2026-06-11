@@ -45,7 +45,16 @@ const app = new Hono();
 
 const corsOrigins = getCorsOrigins();
 
-app.use("*", logger());
+app.use("*", async (c, next) => {
+  const url = c.req.url;
+  const masked = url.includes("/ws?") ? url.replace(/token=[^&]+/, "token=***") : url;
+  const method = c.req.method;
+  const start = Date.now();
+  await next();
+  const ms = Date.now() - start;
+  const status = c.res.status;
+  console.log(`${method} ${masked} ${status} ${ms}ms`);
+});
 
 app.use("*", async (c, next) => {
   const origin = c.req.header("origin") || "";
