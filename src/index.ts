@@ -142,13 +142,8 @@ app.get("/api/search", async (c) => {
     return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
   }
 
-  try {
-    const tracks = await searchJioSaavnResults(q);
-    return c.json({ tracks });
-  } catch (err) {
-    console.error("Search error:", err);
-    return c.json({ error: "Search failed" }, 500);
-  }
+  const results = await searchJioSaavnResults(q);
+  return c.json({ tracks: results, source: "jiosaavn" });
 });
 
 app.post("/api/resolve", async (c) => {
@@ -170,9 +165,9 @@ app.post("/api/resolve", async (c) => {
     return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
   }
 
-  let jioResult = null;
-
   const isNumericId = /^\d+$/.test(body.videoId);
+
+  let jioResult = null;
   if (isNumericId) {
     jioResult = await resolveJioSaavnById(body.videoId);
   }
