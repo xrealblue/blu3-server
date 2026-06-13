@@ -369,6 +369,32 @@ async function getYouTubePlaylistTracks(url: string): Promise<{ name: string; tr
   }
 }
 
+// ── YouTube Music fallback using ytmusic-api ──
+
+async function getYouTubeMusicPlaylistTracks(
+  playlistId: string,
+): Promise<{ name: string; tracks: YouTubePlaylistTrack[] } | null> {
+  try {
+    const { default: YTMusic } = await import("ytmusic-api");
+    const yt = new YTMusic();
+    await yt.initialize();
+    const videos = await yt.getPlaylistVideos(playlistId);
+    if (!videos || videos.length === 0) return null;
+    const name = await yt
+      .getPlaylist(playlistId)
+      .then((p: any) => p.name || "Imported YouTube Music Playlist")
+      .catch(() => "Imported YouTube Music Playlist");
+    const tracks: YouTubePlaylistTrack[] = videos.map((v: any) => ({
+      title: v.name || "Unknown",
+      artist: v.artist?.name || "Unknown Artist",
+    }));
+    return { name, tracks };
+  } catch (err) {
+    console.error("YouTube Music playlist fetch failed:", err);
+    return null;
+  }
+}
+
 // ── ENDPOINTS ──
 
 // GET /api/playlists — Fetch all playlists for current user
@@ -608,8 +634,16 @@ playlistsRoute.post("/import", async (c) => {
 
   try {
     if (isYouTube) {
-      // ── YouTube Import (scrape → JioSaavn resolve) ──
-      const scraped = await getYouTubePlaylistTracks(url);
+      // ── YouTube Import (scrape → YT Music API fallback → JioSaavn resolve) ──
+      let scraped = await getYouTubePlaylistTracks(url);
+      if (!scraped || scraped.tracks.length === 0) {
+        const ytRegex = /[&?]list=([a-zA-Z0-9_-]+)/;
+        const match = url.match(ytRegex);
+        const playlistId = match ? match[1] : null;
+        if (playlistId) {
+          scraped = await getYouTubeMusicPlaylistTracks(playlistId);
+        }
+      }
       if (!scraped || scraped.tracks.length === 0) {
         return c.json({ error: "Failed to fetch YouTube playlist. Ensure the playlist is public." }, 404);
       }
