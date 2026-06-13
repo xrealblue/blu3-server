@@ -286,24 +286,22 @@ export async function handleWS(ws: any, url: URL) {
           const seekTo = clampTime(msg.currentTime);
           const currentTl = await getPlayback(roomCode);
 
-          if (currentTl?.videoId && currentTl.videoId !== msg.videoId) {
-            if (currentTl.isPlaying) {
-              pushTrackHistory(dbRoom.id, {
-                videoId: currentTl.videoId,
-                trackName: currentTl.trackName ?? "",
-                artistName: currentTl.artistName ?? "",
-                image: currentTl.image ?? "",
-              }).catch(console.error);
+          if (currentTl?.videoId && currentTl.videoId !== msg.videoId && currentTl.isPlaying) {
+            pushTrackHistory(dbRoom.id, {
+              videoId: currentTl.videoId,
+              trackName: currentTl.trackName ?? "",
+              artistName: currentTl.artistName ?? "",
+              image: currentTl.image ?? "",
+            }).catch(console.error);
 
-              pushRecentTrack(roomCode, {
-                videoId: currentTl.videoId,
-                source: currentTl.source ?? "youtube",
-                trackName: currentTl.trackName ?? "",
-                artistName: currentTl.artistName ?? "",
-                image: currentTl.image ?? "",
-                playedAt: serverNow,
-              });
-            }
+            pushRecentTrack(roomCode, {
+              videoId: currentTl.videoId,
+              source: currentTl.source ?? "youtube",
+              trackName: currentTl.trackName ?? "",
+              artistName: currentTl.artistName ?? "",
+              image: currentTl.image ?? "",
+              playedAt: serverNow,
+            });
 
             const oldTrack = (await getQueue(roomCode)).find(
               (t) => t.videoId === currentTl.videoId || t.id === currentTl.videoId,
@@ -420,17 +418,16 @@ export async function handleWS(ws: any, url: URL) {
           );
           if (endedTrack) await moveQueueTrackToEnd(roomCode, endedTrack.id);
 
+          await setPlayback(roomCode, {
+            isPlaying: false,
+            currentTime: clampTime(msg.currentTime ?? currentPlayback.currentTime),
+            updatedAt: serverNow,
+          });
+
           broadcast(roomCode, {
             type: "room:queue_update",
             queue: await getQueue(roomCode),
             recentTracks: getRecentTracks(roomCode),
-          });
-
-          await setPlayback(roomCode, {
-            isPlaying: false,
-            videoId: null,
-            currentTime: clampTime(msg.currentTime ?? currentPlayback.currentTime),
-            updatedAt: serverNow,
           });
 
           scheduleQueueSync(dbRoom.id, roomCode);
