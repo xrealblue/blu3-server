@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { playlists, playlistTracks } from "../db/schema.js";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { searchJioSaavnResults } from "../lib/jiosaavnAudio.js";
-import { searchYouTube } from "../lib/ytAudio.js";
+import { searchYouTube, searchYouTubeWithMetadata } from "../lib/ytAudio.js";
 import { getSessionFromRequest } from "../lib/auth.js";
 import { getCached, setCache } from "../lib/responseCache.js";
 
@@ -242,9 +242,9 @@ async function resolveTrackToJioSaavn(
         durationMs: match.duration_ms,
       };
     }
-    const ytVideoId = await searchYouTube(query);
-    if (ytVideoId) {
-      return { videoId: ytVideoId, image: "", durationMs: 0 };
+    const yt = await searchYouTubeWithMetadata(query);
+    if (yt) {
+      return { videoId: yt.videoId, image: yt.thumbnail, durationMs: yt.durationMs };
     }
   } catch (err) {
     console.error("JioSaavn search failed:", err);

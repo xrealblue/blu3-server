@@ -197,13 +197,14 @@ app.post("/api/resolve", async (c) => {
   }
 
   const isNumericId = /^\d+$/.test(body.videoId);
+  const isYouTubeId = /^[a-zA-Z0-9_-]{11}$/.test(body.videoId);
 
   let jioResult = null;
   if (isNumericId) {
     jioResult = await resolveJioSaavnById(body.videoId, body.name);
   }
 
-  if (!jioResult && body.name?.trim()) {
+  if (!jioResult && !isYouTubeId && body.name?.trim()) {
     jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists);
   }
 
