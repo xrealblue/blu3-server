@@ -99,15 +99,22 @@ audioFallbackRoute.get("/yt-audio/:videoId", async (c) => {
       return c.newResponse(redirectRes.body as any, redirectRes.status as any, responseHeaders);
     }
 
-    const stream = await getStream(videoId);
+    const streamRes = await getStream(videoId, c.req.header("Range") || "");
 
-    const webmHeaders: Record<string, string> = {
-      "Content-Type": "audio/webm",
-      "Cache-Control": "private, max-age=3600",
-      "Transfer-Encoding": "chunked",
-    };
+    const responseHeaders: Record<string, string> = {};
+    streamRes.headers.forEach((value, key) => {
+      if (
+        ["content-type", "content-length", "content-range", "accept-ranges"].includes(
+          key.toLowerCase(),
+        )
+      ) {
+        responseHeaders[key] = value;
+      }
+    });
+    responseHeaders["Cache-Control"] = "private, max-age=3600";
+    responseHeaders["Accept-Ranges"] = "bytes";
 
-    return c.newResponse(stream as any, 200, webmHeaders);
+    return c.newResponse(streamRes.body as any, streamRes.status as any, responseHeaders);
   } catch (err) {
     console.error(`[YTAudio] error for ${videoId}:`, err);
     return c.json({ error: "YouTube audio unavailable" }, 502);
