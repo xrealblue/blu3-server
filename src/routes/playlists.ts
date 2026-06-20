@@ -229,6 +229,7 @@ function isMatch(title: string, artist: string, expectedTitle: string, expectedA
 async function resolveTrackToJioSaavn(
   trackName: string,
   artistName: string,
+  expectedDurationMs?: number,
 ): Promise<{ videoId: string; image: string; durationMs: number }> {
   const query = `${trackName} ${artistName !== "Unknown Artist" ? artistName : ""}`.trim();
   try {
@@ -237,11 +238,16 @@ async function resolveTrackToJioSaavn(
       isMatch(r.name, r.artists[0]?.name || "", trackName, artistName)
     );
     if (match) {
-      return {
-        videoId: match.videoId,
-        image: match.image,
-        durationMs: match.duration_ms,
-      };
+      const jioDuration = match.duration_ms;
+      const isWrong = expectedDurationMs && expectedDurationMs > 0
+        && Math.abs(jioDuration - expectedDurationMs) > 5000;
+      if (!isWrong) {
+        return {
+          videoId: match.videoId,
+          image: match.image,
+          durationMs: jioDuration,
+        };
+      }
     }
     const yt = await searchYouTubeWithMetadata(query);
     if (yt) {
