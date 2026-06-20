@@ -62,6 +62,7 @@ async function getSpotifyAccessToken(clientId: string, clientSecret: string): Pr
 interface ScrapedSpotifyTrack {
   trackName: string;
   artistName: string;
+  durationMs?: number;
 }
 
 async function getSpotifyPlaylistTracksViaEmbed(playlistId: string): Promise<{ name: string; tracks: ScrapedSpotifyTrack[] } | null> {
@@ -813,6 +814,7 @@ playlistsRoute.post("/import", async (c) => {
               tracksToResolve = spotifyItems.map((item: any) => ({
                 trackName: item?.track?.name || "Unknown Track",
                 artistName: item?.track?.artists?.map((a: any) => a.name).join(", ") || "Unknown Artist",
+                durationMs: item?.track?.duration_ms || 0,
               }));
               fetchedSuccessfully = true;
             } else {
@@ -857,8 +859,9 @@ playlistsRoute.post("/import", async (c) => {
           chunk.map(async (item: ScrapedSpotifyTrack) => {
             const trackName = item.trackName;
             const artistName = item.artistName;
+            const spotifyDuration = item.durationMs || 0;
 
-            const resolved = await resolveTrackToJioSaavn(trackName, artistName);
+            const resolved = await resolveTrackToJioSaavn(trackName, artistName, spotifyDuration);
             if (resolved.videoId) {
               return {
                 playlistId: newPlaylist.id,
