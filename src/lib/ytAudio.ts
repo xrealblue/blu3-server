@@ -42,11 +42,13 @@ export async function extractAudioUrl(videoId: string): Promise<string> {
   return url;
 }
 
-export async function getStream(videoId: string): Promise<ReadableStream> {
+export async function getStream(videoId: string, rangeHeader?: string): Promise<Response> {
   const url = await extractAudioUrl(videoId);
-  const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
-  if (!res.ok || !res.body) throw new Error("Failed to fetch audio stream");
-  return res.body;
+  const headers: Record<string, string> = {};
+  if (rangeHeader) headers["Range"] = rangeHeader;
+  const res = await fetch(url, { signal: AbortSignal.timeout(20000), headers });
+  if (!res.ok && res.status !== 206) throw new Error("Failed to fetch audio stream");
+  return res;
 }
 
 export interface YouTubeSearchResult {
