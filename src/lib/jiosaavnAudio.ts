@@ -128,6 +128,16 @@ function normalizeQuery(name: string, artists?: string): string {
   return q.toLowerCase().replace(/\(.*?\)/g, "").replace(/\[.*?\]/g, "").trim();
 }
 
+function normalizeStr(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function isJioMatch(title: string, expectedTitle: string): boolean {
+  const a = normalizeStr(title);
+  const b = normalizeStr(expectedTitle);
+  return a.includes(b) || b.includes(a);
+}
+
 export async function searchJioSaavnResults(query: string): Promise<JioSearchTrack[]> {
   try {
     const url = new URL(SEARCH_BASE);
@@ -167,10 +177,11 @@ export async function searchJioSaavnResults(query: string): Promise<JioSearchTra
   }
 }
 
-export async function resolveJioSaavnById(id: string): Promise<ResolveResult | null> {
+export async function resolveJioSaavnById(id: string, expectedName?: string): Promise<ResolveResult | null> {
   try {
     const details = await getSongDetails(id);
     if (!details?.encryptedUrl) return null;
+    if (expectedName && !isJioMatch(details.title, expectedName)) return null;
     const url = getBestQualityUrl(details.encryptedUrl, details.has320);
     if (url) return { url, source: "jiosaavn", videoId: id };
     return null;
@@ -191,6 +202,8 @@ export async function resolveJioSaavn(
 
     const song = await searchJioSaavn(query);
     if (!song?.encryptedUrl) return null;
+
+    if (!isJioMatch(song.title, name)) return null;
 
     if (song.id) {
       const details = await getSongDetails(song.id);

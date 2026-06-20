@@ -11,8 +11,10 @@ import * as schema from "./db/schema.js";
 import { eq } from "drizzle-orm";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
+import audioFallbackRoute from "./routes/audioFallback.js";
 import { handleWS } from "./ws/handler.js";
 import { resolveJioSaavn, resolveJioSaavnById, searchJioSaavnResults } from "./lib/jiosaavnAudio.js";
+import { extractAudioUrl, searchYouTube } from "./lib/ytAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
 
 const audioCache = new Map<string, { cdnUrl: string; fetchedAt: number }>();
@@ -137,6 +139,7 @@ app.on(["GET", "POST"], "/api/auth/*", async (c) => {
 
 app.route("/api/rooms", roomsRoute);
 app.route("/api/playlists", playlistsRoute);
+app.route("/api", audioFallbackRoute);
 
 app.get(
   "/ws",
@@ -197,7 +200,7 @@ app.post("/api/resolve", async (c) => {
 
   let jioResult = null;
   if (isNumericId) {
-    jioResult = await resolveJioSaavnById(body.videoId);
+    jioResult = await resolveJioSaavnById(body.videoId, body.name);
   }
 
   if (!jioResult && body.name?.trim()) {
@@ -207,6 +210,34 @@ app.post("/api/resolve", async (c) => {
   if (jioResult?.url) {
     audioCache.set(body.videoId, { cdnUrl: jioResult.url, fetchedAt: Date.now() });
     return c.json({ source: "youtube", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
+  }
+
+  try {
+    const audioUrl = await extractAudioUrl(body.videoId);
+    return c.json({
+      source: "youtube",
+      videoId: body.videoId,
+      audioUrl: `/api/yt-audio/${body.videoId}`,
+    });
+  } catch (err) {
+    console.error(`[Resolve] yt-dlp fallback failed for ${body.videoId}:`, err);
+  }
+
+  if (body.name?.trim()) {
+    try {
+      const searchQuery = `${body.name} ${body.artists ?? ""}`.trim();
+      const foundId = await searchYouTube(searchQuery);
+      if (foundId) {
+        const audioUrl = await extractAudioUrl(foundId);
+        return c.json({
+          source: "youtube",
+          videoId: foundId,
+          audioUrl: `/api/yt-audio/${foundId}`,
+        });
+      }
+    } catch (err) {
+      console.error(`[Resolve] YouTube search fallback failed:`, err);
+    }
   }
 
   return c.json({ source: "youtube", videoId: body.videoId });
@@ -271,10 +302,6 @@ app.get("/api/audio/:videoId", async (c) => {
     audioCache.delete(videoId);
     return c.json({ error: "Proxy failed" }, 404);
   }
-});
-
-app.get("/api/suggest", async (c) => {
-  return c.json({ suggestions: [] });
 });
 
 const port = Number(process.env.PORT ?? 8000);
