@@ -253,6 +253,12 @@ async function resolveTrackToJioSaavn(
           };
         }
       }
+      if (!match) {
+        console.error(`[resolve] "${query}": no JioSaavn match among ${results.length} results`);
+        if (results.length > 0) {
+          console.error(`[resolve]   top result: "${results[0].name}" - "${results[0].artists[0]?.name}"`);
+        }
+      }
       const yt = await searchYouTubeWithMetadata(query);
       if (yt) {
         return { videoId: yt.videoId, image: yt.thumbnail, durationMs: yt.durationMs };
