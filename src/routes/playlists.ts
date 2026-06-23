@@ -231,32 +231,38 @@ async function resolveTrackToJioSaavn(
   artistName: string,
   expectedDurationMs?: number,
 ): Promise<{ videoId: string; image: string; durationMs: number }> {
-  const query = `${trackName} ${artistName !== "Unknown Artist" ? artistName : ""}`.trim();
-  try {
-    const results = await searchJioSaavnResults(query);
-    const match = results.find((r) =>
-      isMatch(r.name, r.artists[0]?.name || "", trackName, artistName)
-    );
-    if (match) {
-      const jioDuration = match.duration_ms;
-      const isWrong = expectedDurationMs && expectedDurationMs > 0
-        && Math.abs(jioDuration - expectedDurationMs) > 5000;
-      if (!isWrong) {
-        return {
-          videoId: match.videoId,
-          image: match.image,
-          durationMs: jioDuration,
-        };
+  const timeout = new Promise<{ videoId: ""; image: ""; durationMs: 0 }>((_, reject) =>
+    setTimeout(() => reject(new Error("resolveTrackToJioSaavn timed out")), 15000),
+  );
+  const resolve = (async () => {
+    const query = `${trackName} ${artistName !== "Unknown Artist" ? artistName : ""}`.trim();
+    try {
+      const results = await searchJioSaavnResults(query);
+      const match = results.find((r) =>
+        isMatch(r.name, r.artists[0]?.name || "", trackName, artistName)
+      );
+      if (match) {
+        const jioDuration = match.duration_ms;
+        const isWrong = expectedDurationMs && expectedDurationMs > 0
+          && Math.abs(jioDuration - expectedDurationMs) > 5000;
+        if (!isWrong) {
+          return {
+            videoId: match.videoId,
+            image: match.image,
+            durationMs: jioDuration,
+          };
+        }
       }
+      const yt = await searchYouTubeWithMetadata(query);
+      if (yt) {
+        return { videoId: yt.videoId, image: yt.thumbnail, durationMs: yt.durationMs };
+      }
+    } catch (err) {
+      console.error("JioSaavn search failed:", err);
     }
-    const yt = await searchYouTubeWithMetadata(query);
-    if (yt) {
-      return { videoId: yt.videoId, image: yt.thumbnail, durationMs: yt.durationMs };
-    }
-  } catch (err) {
-    console.error("JioSaavn search failed:", err);
-  }
-  return { videoId: "", image: "", durationMs: 0 };
+    return { videoId: "", image: "", durationMs: 0 };
+  })();
+  return Promise.race([resolve, timeout]);
 }
 
 interface JioSaavnPlaylistTrack {
