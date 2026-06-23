@@ -69,7 +69,8 @@ export async function searchYouTube(query: string): Promise<string | null> {
   try {
     const info = await ytSearchWithTimeout(query);
     return info?.id || null;
-  } catch {
+  } catch (err) {
+    console.error(`[ytAudio] searchYouTube("${query}") failed:`, err);
     return null;
   }
 }
@@ -77,13 +78,17 @@ export async function searchYouTube(query: string): Promise<string | null> {
 export async function searchYouTubeWithMetadata(query: string): Promise<YouTubeSearchResult | null> {
   try {
     const info = await ytSearchWithTimeout(query);
-    if (!info?.id) return null;
+    if (!info?.id) {
+      console.error(`[ytAudio] searchYouTubeWithMetadata("${query}") returned no id`);
+      return null;
+    }
     return {
       videoId: info.id,
       thumbnail: info.thumbnail || `https://i.ytimg.com/vi/${info.id}/hqdefault.jpg`,
       durationMs: (info.duration || 0) * 1000,
     };
-  } catch {
+  } catch (err) {
+    console.error(`[ytAudio] searchYouTubeWithMetadata("${query}") failed:`, err);
     return null;
   }
 }
