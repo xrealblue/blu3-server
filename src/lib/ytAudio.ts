@@ -57,9 +57,17 @@ export interface YouTubeSearchResult {
   durationMs: number;
 }
 
+async function ytSearchWithTimeout(query: string, timeoutMs = 10000): Promise<any> {
+  const promise = ytDlpWrap.getVideoInfo(`ytsearch:${query}`);
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("yt-dlp search timed out")), timeoutMs),
+  );
+  return Promise.race([promise, timeout]);
+}
+
 export async function searchYouTube(query: string): Promise<string | null> {
   try {
-    const info = await ytDlpWrap.getVideoInfo(`ytsearch:${query}`);
+    const info = await ytSearchWithTimeout(query);
     return info?.id || null;
   } catch {
     return null;
@@ -68,7 +76,7 @@ export async function searchYouTube(query: string): Promise<string | null> {
 
 export async function searchYouTubeWithMetadata(query: string): Promise<YouTubeSearchResult | null> {
   try {
-    const info = await ytDlpWrap.getVideoInfo(`ytsearch:${query}`);
+    const info = await ytSearchWithTimeout(query);
     if (!info?.id) return null;
     return {
       videoId: info.id,
