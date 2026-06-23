@@ -7,8 +7,20 @@ const { default: YTDlpWrap } = require("yt-dlp-wrap") as {
     execStream(ytDlpArguments?: string[]): any;
   };
 };
+const YTMusic = require("yt-music-api") as new () => {
+  initialize(opts?: { cookies?: string; GL?: string; HL?: string }): Promise<any>;
+  searchSongs(query: string): Promise<{
+    videoId: string;
+    name: string;
+    artist: { name: string };
+    duration: number | null;
+    thumbnails: { url: string; width: number; height: number }[];
+  }[]>;
+};
 
 const ytDlpWrap = new YTDlpWrap();
+const ytMusicApi = new YTMusic();
+let ytMusicInitialized = false;
 
 const audioUrlCache = new Map<string, { url: string; fetchedAt: number }>();
 const CACHE_TTL = 6 * 60 * 60 * 1000;
@@ -57,18 +69,18 @@ export interface YouTubeSearchResult {
   durationMs: number;
 }
 
-async function ytSearchWithTimeout(query: string, timeoutMs = 10000): Promise<any> {
-  const promise = ytDlpWrap.getVideoInfo(`ytsearch:${query}`);
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error("yt-dlp search timed out")), timeoutMs),
-  );
-  return Promise.race([promise, timeout]);
+async function ensureYtMusic() {
+  if (!ytMusicInitialized) {
+    await ytMusicApi.initialize({ GL: "US", HL: "en" });
+    ytMusicInitialized = true;
+  }
 }
 
 export async function searchYouTube(query: string): Promise<string | null> {
   try {
-    const info = await ytSearchWithTimeout(query);
-    return info?.id || null;
+    await ensureYtMusic();
+    const results = await ytMusicApi.searchSongs(query);
+    return results[0]?.videoId || null;
   } catch (err) {
     console.error(`[ytAudio] searchYouTube("${query}") failed:`, err);
     return null;
@@ -77,15 +89,14 @@ export async function searchYouTube(query: string): Promise<string | null> {
 
 export async function searchYouTubeWithMetadata(query: string): Promise<YouTubeSearchResult | null> {
   try {
-    const info = await ytSearchWithTimeout(query);
-    if (!info?.id) {
-      console.error(`[ytAudio] searchYouTubeWithMetadata("${query}") returned no id`);
-      return null;
-    }
+    await ensureYtMusic();
+    const results = await ytMusicApi.searchSongs(query);
+    if (!results[0]?.videoId) return null;
+    const hit = results[0];
     return {
-      videoId: info.id,
-      thumbnail: info.thumbnail || `https://i.ytimg.com/vi/${info.id}/hqdefault.jpg`,
-      durationMs: (info.duration || 0) * 1000,
+      videoId: hit.videoId,
+      thumbnail: `https://i.ytimg.com/vi/${hit.videoId}/hqdefault.jpg`,
+      durationMs: (hit.duration || 0) * 1000,
     };
   } catch (err) {
     console.error(`[ytAudio] searchYouTubeWithMetadata("${query}") failed:`, err);
