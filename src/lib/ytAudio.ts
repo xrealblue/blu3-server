@@ -4,8 +4,9 @@ const require = createRequire(import.meta.url);
 const { default: YTDlpWrap } = require("yt-dlp-wrap") as {
   default: new (binaryPath?: string) => {
     getVideoInfo(ytDlpArguments: string | string[]): Promise<any>;
+    execPromise(ytDlpArguments: string[], options?: any, abortSignal?: AbortSignal): Promise<string>;
     execStream(ytDlpArguments?: string[]): any;
-    @yt  };
+  };
 };
 const YTMusic = require("ytmusic-api") as new () => {
   initialize(opts?: { cookies?: string; GL?: string; HL?: string }): Promise<any>;
