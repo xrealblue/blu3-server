@@ -7,7 +7,7 @@ const { default: YTDlpWrap } = require("yt-dlp-wrap") as {
     execStream(ytDlpArguments?: string[]): any;
   };
 };
-const YTMusic = require("yt-music-api") as new () => {
+const YTMusic = require("ytmusic-api") as new () => {
   initialize(opts?: { cookies?: string; GL?: string; HL?: string }): Promise<any>;
   searchSongs(query: string): Promise<{
     videoId: string;
