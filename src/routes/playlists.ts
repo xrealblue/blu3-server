@@ -858,7 +858,7 @@ playlistsRoute.post("/import", async (c) => {
 
       const tracksToInsert: any[] = [];
 
-      const chunks = chunkArray(tracksToResolve, 5);
+      const chunks = chunkArray(tracksToResolve, 2);
       let positionCounter = 0;
 
       let failedCount = 0;
