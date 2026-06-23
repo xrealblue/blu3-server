@@ -5,7 +5,7 @@ const { default: YTDlpWrap } = require("yt-dlp-wrap") as {
   default: new (binaryPath?: string) => {
     getVideoInfo(ytDlpArguments: string | string[]): Promise<any>;
     execStream(ytDlpArguments?: string[]): any;
-  };
+    @yt  };
 };
 const YTMusic = require("ytmusic-api") as new () => {
   initialize(opts?: { cookies?: string; GL?: string; HL?: string }): Promise<any>;
