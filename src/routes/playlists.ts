@@ -838,6 +838,7 @@ playlistsRoute.post("/import", async (c) => {
         if (scraped) {
           playlistName = scraped.name;
           tracksToResolve = scraped.tracks;
+          console.log(`Embed scraper returned ${tracksToResolve.length} tracks for playlist "${playlistName}"`);
           fetchedSuccessfully = true;
         }
       }
@@ -860,6 +861,7 @@ playlistsRoute.post("/import", async (c) => {
       const chunks = chunkArray(tracksToResolve, 5);
       let positionCounter = 0;
 
+      let failedCount = 0;
       for (const chunk of chunks) {
         const resolvedList = await Promise.all(
           chunk.map(async (item: ScrapedSpotifyTrack) => {
@@ -878,6 +880,7 @@ playlistsRoute.post("/import", async (c) => {
                 durationMs: resolved.durationMs,
               };
             }
+            console.error(`[Import] Failed to resolve: "${trackName}" - ${artistName}`);
             return null;
           })
         );
@@ -888,6 +891,8 @@ playlistsRoute.post("/import", async (c) => {
               ...item,
               position: positionCounter++,
             });
+          } else {
+            failedCount++;
           }
         }
       }
@@ -895,6 +900,8 @@ playlistsRoute.post("/import", async (c) => {
       if (tracksToInsert.length > 0) {
         await db.insert(playlistTracks).values(tracksToInsert);
       }
+
+      console.log(`[Import] Resolved ${tracksToInsert.length}/${tracksToResolve.length} tracks (${failedCount} failed)`);
 
       return c.json({ playlist: newPlaylist, trackCount: tracksToInsert.length });
     }
