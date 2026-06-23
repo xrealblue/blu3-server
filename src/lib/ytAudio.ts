@@ -42,17 +42,21 @@ export function getCachedAudioUrl(videoId: string): string | null {
 }
 
 const INVidIOUS_INSTANCES = [
-  "https://inv.nadeko.net",
-  "https://yewtu.be",
-  "https://invidious.flokinet.to",
-  "https://vid.puffyan.us",
+  "https://inv.nadeko.net/api/v1/videos/",
+  "https://yewtu.be/api/v1/videos/",
+  "https://invidious.snopyta.org/api/v1/videos/",
+  "https://inv.zzls.xyz/api/v1/videos/",
+  "https://invidious.xyz/api/v1/videos/",
+  "https://invidious.privacydev.net/api/v1/videos/",
 ];
 
 async function fetchAudioUrlFromInvidious(videoId: string): Promise<string | null> {
-  for (const instance of INVidIOUS_INSTANCES) {
+  const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  for (const base of INVidIOUS_INSTANCES) {
     try {
-      const res = await fetch(`${instance}/api/v1/videos/${videoId}`, {
+      const res = await fetch(`${base}${videoId}`, {
         signal: AbortSignal.timeout(8000),
+        headers: { "User-Agent": ua },
       });
       if (!res.ok) continue;
       const data: any = await res.json();
@@ -66,31 +70,40 @@ async function fetchAudioUrlFromInvidious(videoId: string): Promise<string | nul
   return null;
 }
 
+async function tryYtDlpExtract(videoId: string): Promise<string | null> {
+  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const strategies = [
+    { args: ["--extractor-args", "youtube:player_client=android"] },
+    { args: [] },
+  ];
+  for (const s of strategies) {
+    try {
+      const args = [videoUrl, "-f", "bestaudio", "--dump-json", ...s.args];
+      const stdout = await ytDlpWrap.execPromise(args, undefined, AbortSignal.timeout(20000));
+      const info = JSON.parse(stdout);
+      if (info.url) return info.url;
+    } catch {}
+  }
+  return null;
+}
+
 export async function extractAudioUrl(videoId: string): Promise<string> {
   const cached = getCachedAudioUrl(videoId);
   if (cached) return cached;
 
-  const ytDlpPromise = (async () => {
-    const args = [
-      `https://www.youtube.com/watch?v=${videoId}`,
-      "-f", "bestaudio",
-      "--dump-json",
-    ];
-    const stdout = await ytDlpWrap.execPromise(args, undefined, AbortSignal.timeout(20000));
-    const info = JSON.parse(stdout);
-    if (!info.url) throw new Error("No audio URL in yt-dlp response");
-    return info.url;
-  })();
+  const ytDlpUrl = await tryYtDlpExtract(videoId);
+  if (ytDlpUrl) {
+    audioUrlCache.set(videoId, { url: ytDlpUrl, fetchedAt: Date.now() });
+    return ytDlpUrl;
+  }
 
-  const invidiousPromise = (async () => {
-    return fetchAudioUrlFromInvidious(videoId);
-  })();
+  const invidiousUrl = await fetchAudioUrlFromInvidious(videoId);
+  if (invidiousUrl) {
+    audioUrlCache.set(videoId, { url: invidiousUrl, fetchedAt: Date.now() });
+    return invidiousUrl;
+  }
 
-  const url = await Promise.any([ytDlpPromise, invidiousPromise])
-    .catch(() => { throw new Error(`Failed to extract audio URL for ${videoId}`); });
-
-  audioUrlCache.set(videoId, { url, fetchedAt: Date.now() });
-  return url;
+  throw new Error(`Failed to extract audio URL for ${videoId}`);
 }
 
 export async function getStream(videoId: string, rangeHeader?: string): Promise<Response> {
