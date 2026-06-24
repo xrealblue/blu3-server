@@ -51,17 +51,23 @@ function createYtdlAgent(): any | null {
     const jar = new CookieJar();
     for (const line of text.split("\n")) {
       const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
+      if (!trimmed || trimmed === "#" || trimmed.startsWith("# ")) continue;
       const parts = trimmed.split("\t");
       if (parts.length >= 7 && parts[5] && parts[6]) {
+        let rawDomain = parts[0];
+        let httpOnly = false;
+        if (rawDomain.startsWith("#HttpOnly_")) {
+          httpOnly = true;
+          rawDomain = rawDomain.slice(10);
+        }
         const cookie = new Cookie({
           key: parts[5],
           value: parts[6],
-          domain: parts[0].startsWith(".") ? parts[0] : `.${parts[0]}`,
+          domain: rawDomain.startsWith(".") ? rawDomain : `.${rawDomain}`,
           path: parts[2] || "/",
           secure: parts[3] === "TRUE",
           expires: parts[4] === "0" ? "Infinity" : new Date(parseInt(parts[4]) * 1000),
-          httpOnly: false,
+          httpOnly,
         });
         jar.setCookieSync(cookie, "https://youtube.com");
       }
