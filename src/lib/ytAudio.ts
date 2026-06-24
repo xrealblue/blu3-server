@@ -1,6 +1,5 @@
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 
 const require = createRequire(import.meta.url);
 const { default: YTDlpWrap } = require("yt-dlp-wrap") as {
@@ -41,21 +40,6 @@ export function getCachedAudioUrl(videoId: string): string | null {
     return entry.url;
   }
   return null;
-}
-
-const BINARY_PATH = process.env.YT_AUDIO_EXTRACTOR_PATH || "./yt-audio-extractor/target/release/yt-audio-extractor";
-
-async function tryYtAudioExtractor(videoId: string): Promise<string | null> {
-  if (!existsSync(BINARY_PATH)) return null;
-  try {
-    const args = ["--video-id", videoId];
-    if (existsSync(COOKIES_PATH)) args.push("--cookies", COOKIES_PATH);
-    const stdout = execFileSync(BINARY_PATH, args, { timeout: 20000, encoding: "utf8" });
-    const { url } = JSON.parse(stdout);
-    return url || null;
-  } catch {
-    return null;
-  }
 }
 
 const INVidIOUS_INSTANCES = [
@@ -108,12 +92,6 @@ async function tryYtDlpExtract(videoId: string): Promise<string | null> {
 export async function extractAudioUrl(videoId: string): Promise<string> {
   const cached = getCachedAudioUrl(videoId);
   if (cached) return cached;
-
-  const binaryUrl = await tryYtAudioExtractor(videoId);
-  if (binaryUrl) {
-    audioUrlCache.set(videoId, { url: binaryUrl, fetchedAt: Date.now() });
-    return binaryUrl;
-  }
 
   const ytDlpUrl = await tryYtDlpExtract(videoId);
   if (ytDlpUrl) {
