@@ -1,27 +1,12 @@
 import { createRequire } from "node:module";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 
 const require = createRequire(import.meta.url);
 const { default: YTDlpWrap } = require("yt-dlp-wrap") as {
   default: new (binaryPath?: string) => {
-    getVideoInfo(ytDlpArguments: string | string[]): Promise<any>;
     execPromise(ytDlpArguments: string[], options?: any, abortSignal?: AbortSignal): Promise<string>;
-    execStream(ytDlpArguments?: string[]): any;
   };
-};
-const { Cookie, CookieJar } = require("tough-cookie") as {
-  Cookie: new (opts: {
-    key: string; value: string; domain: string; path: string;
-    secure: boolean; expires: string | Date;
-    httpOnly: boolean;
-  }) => any;
-  CookieJar: new () => { setCookieSync(cookie: any, url: string): void };
-};
-const ytdl = require("ytdl-core-enhanced") as {
-  getInfo(url: string, options?: any): Promise<any>;
-  filterFormats(formats: any[], filter?: string): any[];
-  chooseFormat(formats: any[], options?: any): any;
-  createAgent(jar: any): any;
 };
 const YTMusic = require("ytmusic-api") as new () => {
   initialize(opts?: { cookies?: string; GL?: string; HL?: string }): Promise<any>;
@@ -39,46 +24,6 @@ const ytMusicApi = new YTMusic();
 let ytMusicInitialized = false;
 
 const COOKIES_PATH = process.env.YOUTUBE_COOKIES_PATH || "./cookies.txt";
-let cachedAgent: any | null = null;
-let agentCachedAt = 0;
-
-function createYtdlAgent(): any | null {
-  if (!existsSync(COOKIES_PATH)) return null;
-  const now = Math.floor(Date.now() / 1000);
-  if (cachedAgent !== null && now - agentCachedAt < 60) return cachedAgent;
-  try {
-    const text = readFileSync(COOKIES_PATH, "utf8");
-    const jar = new CookieJar();
-    for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed === "#" || trimmed.startsWith("# ")) continue;
-      const parts = trimmed.split("\t");
-      if (parts.length >= 7 && parts[5] && parts[6]) {
-        let rawDomain = parts[0];
-        let httpOnly = false;
-        if (rawDomain.startsWith("#HttpOnly_")) {
-          httpOnly = true;
-          rawDomain = rawDomain.slice(10);
-        }
-        const cookie = new Cookie({
-          key: parts[5],
-          value: parts[6],
-          domain: rawDomain.startsWith(".") ? rawDomain : `.${rawDomain}`,
-          path: parts[2] || "/",
-          secure: parts[3] === "TRUE",
-          expires: parts[4] === "0" ? "Infinity" : new Date(parseInt(parts[4]) * 1000),
-          httpOnly,
-        });
-        jar.setCookieSync(cookie, "https://youtube.com");
-      }
-    }
-    cachedAgent = ytdl.createAgent(jar);
-    agentCachedAt = now;
-    return cachedAgent;
-  } catch {
-    return null;
-  }
-}
 
 const audioUrlCache = new Map<string, { url: string; fetchedAt: number }>();
 const CACHE_TTL = 6 * 60 * 60 * 1000;
@@ -96,6 +41,21 @@ export function getCachedAudioUrl(videoId: string): string | null {
     return entry.url;
   }
   return null;
+}
+
+const BINARY_PATH = process.env.YT_AUDIO_EXTRACTOR_PATH || "./yt-audio-extractor/target/release/yt-audio-extractor";
+
+async function tryYtAudioExtractor(videoId: string): Promise<string | null> {
+  if (!existsSync(BINARY_PATH)) return null;
+  try {
+    const args = ["--video-id", videoId];
+    if (existsSync(COOKIES_PATH)) args.push("--cookies", COOKIES_PATH);
+    const stdout = execFileSync(BINARY_PATH, args, { timeout: 20000, encoding: "utf8" });
+    const { url } = JSON.parse(stdout);
+    return url || null;
+  } catch {
+    return null;
+  }
 }
 
 const INVidIOUS_INSTANCES = [
@@ -129,13 +89,14 @@ async function fetchAudioUrlFromInvidious(videoId: string): Promise<string | nul
 
 async function tryYtDlpExtract(videoId: string): Promise<string | null> {
   const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const cookiesArg = existsSync(COOKIES_PATH) ? ["--cookies", COOKIES_PATH] : [];
   const strategies = [
     { args: ["--extractor-args", "youtube:player_client=android"] },
     { args: [] },
   ];
   for (const s of strategies) {
     try {
-      const args = [videoUrl, "-f", "bestaudio", "--dump-json", ...s.args];
+      const args = [videoUrl, "-f", "bestaudio", "--dump-json", ...cookiesArg, ...s.args];
       const stdout = await ytDlpWrap.execPromise(args, undefined, AbortSignal.timeout(20000));
       const info = JSON.parse(stdout);
       if (info.url) return info.url;
@@ -144,28 +105,14 @@ async function tryYtDlpExtract(videoId: string): Promise<string | null> {
   return null;
 }
 
-async function tryYtdlCoreEnhanced(videoId: string): Promise<string | null> {
-  try {
-    const agent = createYtdlAgent();
-    const opts: any = {};
-    if (agent) opts.agent = agent;
-    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`, opts);
-    const audio = ytdl.filterFormats(info.formats, "audio");
-    if (audio.length === 0) return null;
-    const best = audio.sort((a: any, b: any) => (b.audioBitrate || 0) - (a.audioBitrate || 0))[0];
-    return best?.url || null;
-  } catch {}
-  return null;
-}
-
 export async function extractAudioUrl(videoId: string): Promise<string> {
   const cached = getCachedAudioUrl(videoId);
   if (cached) return cached;
 
-  const enhancedUrl = await tryYtdlCoreEnhanced(videoId);
-  if (enhancedUrl) {
-    audioUrlCache.set(videoId, { url: enhancedUrl, fetchedAt: Date.now() });
-    return enhancedUrl;
+  const binaryUrl = await tryYtAudioExtractor(videoId);
+  if (binaryUrl) {
+    audioUrlCache.set(videoId, { url: binaryUrl, fetchedAt: Date.now() });
+    return binaryUrl;
   }
 
   const ytDlpUrl = await tryYtDlpExtract(videoId);
