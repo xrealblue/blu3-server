@@ -14,7 +14,7 @@ import playlistsRoute from "./routes/playlists.js";
 import audioFallbackRoute from "./routes/audioFallback.js";
 import { handleWS } from "./ws/handler.js";
 import { resolveJioSaavn, resolveJioSaavnById, searchJioSaavnResults } from "./lib/jiosaavnAudio.js";
-import { searchYouTube } from "./lib/ytAudio.js";
+import { searchYouTube, getYoutubeMusicAlbumArt } from "./lib/ytAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
 
 const audioCache = new Map<string, { cdnUrl: string; fetchedAt: number }>();
@@ -213,7 +213,8 @@ app.post("/api/resolve", async (c) => {
     return c.json({ source: "jiosaavn", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
   }
 
-  return c.json({ source: "youtube", videoId: body.videoId });
+  const albumArt = body.name ? await getYoutubeMusicAlbumArt(body.name, body.artists) : undefined;
+  return c.json({ source: "youtube", videoId: body.videoId, ...(albumArt ? { image: albumArt } : {}) });
 });
 
 app.get("/api/audio/:videoId", async (c) => {
