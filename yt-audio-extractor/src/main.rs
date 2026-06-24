@@ -6,6 +6,10 @@ use anyhow::{anyhow, Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Serialize;
 
+static CLIENT_VERSION: &str = "19.30.36";
+static USER_AGENT: &str = "com.google.android.youtube/19.30.36 (Linux; U; Android 14; en_US) gzip";
+static API_KEY: &str = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+
 #[derive(Serialize)]
 struct Output {
     url: String,
@@ -90,24 +94,27 @@ fn run() -> Result<Output> {
     };
 
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "X-YouTube-Client-Name",
-        HeaderValue::from_static("3"),
-    );
+    headers.insert("X-YouTube-Client-Name", HeaderValue::from_static("3"));
     headers.insert(
         "X-YouTube-Client-Version",
-        HeaderValue::from_static("19.09.37"),
+        HeaderValue::from_static(CLIENT_VERSION),
     );
     headers.insert(
         "Content-Type",
         HeaderValue::from_static("application/json"),
     );
+    headers.insert("Origin", HeaderValue::from_static("https://www.youtube.com"));
+    headers.insert(
+        "Referer",
+        HeaderValue::from_str(&format!("https://www.youtube.com/watch?v={video_id}"))?,
+    );
+    headers.insert("Accept-Encoding", HeaderValue::from_static("gzip"));
     if !cookie_header.is_empty() {
         headers.insert("Cookie", HeaderValue::from_str(&cookie_header)?);
     }
 
     let client = reqwest::blocking::Client::builder()
-        .user_agent("com.google.android.youtube/19.09.37 (Linux; U; Android 11; en_US) gzip")
+        .user_agent(USER_AGENT)
         .default_headers(headers)
         .build()
         .context("Failed to build HTTP client")?;
@@ -117,18 +124,26 @@ fn run() -> Result<Output> {
         "context": {
             "client": {
                 "clientName": "ANDROID",
-                "clientVersion": "19.09.37",
-                "androidSdkVersion": 30,
+                "clientVersion": CLIENT_VERSION,
+                "androidSdkVersion": 34,
+                "userAgent": USER_AGENT,
                 "osName": "Android",
-                "osVersion": "11",
+                "osVersion": "14",
+                "platform": "MOBILE",
                 "hl": "en",
-                "gl": "US"
+                "gl": "US",
+                "timeZone": "UTC",
+                "utcOffsetMinutes": 0
             }
-        }
+        },
+        "contentCheckOk": true,
+        "racyCheckOk": true
     });
 
     let resp = client
-        .post("https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8")
+        .post(format!(
+            "https://www.youtube.com/youtubei/v1/player?key={API_KEY}"
+        ))
         .json(&body)
         .send()
         .context("InnerTube request failed")?;
@@ -149,7 +164,11 @@ fn run() -> Result<Output> {
         let reason = data["playabilityStatus"]["reason"]
             .as_str()
             .unwrap_or("no reason");
-        return Err(anyhow!("YouTube returned status={}: {}", playability, reason));
+        return Err(anyhow!(
+            "YouTube returned status={}: {}",
+            playability,
+            reason
+        ));
     }
 
     let formats = data["streamingData"]["adaptiveFormats"]
