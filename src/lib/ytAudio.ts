@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { readFileSync, existsSync } from "node:fs";
 
 const require = createRequire(import.meta.url);
 const { default: YTDlpWrap } = require("yt-dlp-wrap") as {
@@ -27,6 +28,35 @@ const YTMusic = require("ytmusic-api") as new () => {
 const ytDlpWrap = new YTDlpWrap();
 const ytMusicApi = new YTMusic();
 let ytMusicInitialized = false;
+
+const COOKIES_PATH = process.env.YOUTUBE_COOKIES_PATH || "./cookies.txt";
+let cachedCookies: string | null = null;
+let cookiesLastRead = 0;
+
+function getYouTubeCookies(): string | null {
+  if (!existsSync(COOKIES_PATH)) return null;
+  const mtime = Math.floor(Date.now() / 1000);
+  if (cachedCookies !== null && mtime - cookiesLastRead < 60) return cachedCookies;
+  try {
+    const text = readFileSync(COOKIES_PATH, "utf8");
+    const pairs: string[] = [];
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const parts = trimmed.split("\t");
+      if (parts.length >= 7) {
+        const name = parts[5];
+        const value = parts[6];
+        if (name && value) pairs.push(`${name}=${value}`);
+      }
+    }
+    cachedCookies = pairs.join("; ");
+    cookiesLastRead = mtime;
+    return cachedCookies;
+  } catch {
+    return null;
+  }
+}
 
 const audioUrlCache = new Map<string, { url: string; fetchedAt: number }>();
 const CACHE_TTL = 6 * 60 * 60 * 1000;
@@ -94,7 +124,10 @@ async function tryYtDlpExtract(videoId: string): Promise<string | null> {
 
 async function tryYtdlCoreEnhanced(videoId: string): Promise<string | null> {
   try {
-    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`);
+    const cookies = getYouTubeCookies();
+    const opts: any = {};
+    if (cookies) opts.requestOptions = { headers: { Cookie: cookies } };
+    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`, opts);
     const audio = ytdl.filterFormats(info.formats, "audio");
     if (audio.length === 0) return null;
     const best = audio.sort((a: any, b: any) => (b.audioBitrate || 0) - (a.audioBitrate || 0))[0];
