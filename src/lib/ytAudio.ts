@@ -9,10 +9,19 @@ const { default: YTDlpWrap } = require("yt-dlp-wrap") as {
     execStream(ytDlpArguments?: string[]): any;
   };
 };
+const { Cookie, CookieJar } = require("tough-cookie") as {
+  Cookie: new (opts: {
+    key: string; value: string; domain: string; path: string;
+    secure: boolean; expires: string | Date;
+    httpOnly: boolean;
+  }) => any;
+  CookieJar: new () => { setCookieSync(cookie: any, url: string): void };
+};
 const ytdl = require("ytdl-core-enhanced") as {
   getInfo(url: string, options?: any): Promise<any>;
   filterFormats(formats: any[], filter?: string): any[];
   chooseFormat(formats: any[], options?: any): any;
+  createAgent(jar: any): any;
 };
 const YTMusic = require("ytmusic-api") as new () => {
   initialize(opts?: { cookies?: string; GL?: string; HL?: string }): Promise<any>;
