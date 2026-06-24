@@ -179,11 +179,21 @@ app.get("/api/search", async (c) => {
   ]);
 
   const merged = [
-    ...jioResults.map((t: any) => ({ ...t, source: "jiosaavn" })),
-    ...ytResults.map((t) => ({ ...t, source: "youtube" })),
+    ...jioResults.map((t: any) => ({ ...t })),
+    ...ytResults.map((t) => ({
+      id: `yt-${t.videoId}`,
+      videoId: t.videoId,
+      name: t.name,
+      duration_ms: t.durationMs,
+      explicit: false,
+      artists: [{ name: t.artist }],
+      album: { name: "" },
+      image: t.thumbnail,
+      source: "youtube",
+    })),
   ];
 
-  return c.json({ tracks: merged, source: "all" });
+  return c.json({ tracks: merged });
 });
 
 app.post("/api/resolve", async (c) => {
