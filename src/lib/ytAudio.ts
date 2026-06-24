@@ -8,6 +8,11 @@ const { default: YTDlpWrap } = require("yt-dlp-wrap") as {
     execStream(ytDlpArguments?: string[]): any;
   };
 };
+const ytdl = require("ytdl-core-enhanced") as {
+  getInfo(url: string, options?: any): Promise<any>;
+  filterFormats(formats: any[], filter?: string): any[];
+  chooseFormat(formats: any[], options?: any): any;
+};
 const YTMusic = require("ytmusic-api") as new () => {
   initialize(opts?: { cookies?: string; GL?: string; HL?: string }): Promise<any>;
   searchSongs(query: string): Promise<{
@@ -87,9 +92,26 @@ async function tryYtDlpExtract(videoId: string): Promise<string | null> {
   return null;
 }
 
+async function tryYtdlCoreEnhanced(videoId: string): Promise<string | null> {
+  try {
+    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`);
+    const audio = ytdl.filterFormats(info.formats, "audio");
+    if (audio.length === 0) return null;
+    const best = audio.sort((a: any, b: any) => (b.audioBitrate || 0) - (a.audioBitrate || 0))[0];
+    return best?.url || null;
+  } catch {}
+  return null;
+}
+
 export async function extractAudioUrl(videoId: string): Promise<string> {
   const cached = getCachedAudioUrl(videoId);
   if (cached) return cached;
+
+  const enhancedUrl = await tryYtdlCoreEnhanced(videoId);
+  if (enhancedUrl) {
+    audioUrlCache.set(videoId, { url: enhancedUrl, fetchedAt: Date.now() });
+    return enhancedUrl;
+  }
 
   const ytDlpUrl = await tryYtDlpExtract(videoId);
   if (ytDlpUrl) {
