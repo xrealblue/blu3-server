@@ -177,7 +177,7 @@ app.get("/api/search", async (c) => {
     searchJioSaavnResults(q),
     searchYouTubeResults(q),
   ]);
-nf
+
   const merged = [
     ...jioResults.map((t: any) => ({ ...t })),
     ...ytResults.map((t) => ({
