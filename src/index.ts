@@ -14,7 +14,7 @@ import playlistsRoute from "./routes/playlists.js";
 import audioFallbackRoute from "./routes/audioFallback.js";
 import { handleWS } from "./ws/handler.js";
 import { resolveJioSaavn, resolveJioSaavnById, searchJioSaavnResults } from "./lib/jiosaavnAudio.js";
-import { searchYouTube, getYoutubeMusicAlbumArt } from "./lib/ytAudio.js";
+import { searchYouTube, searchYouTubeResults, getYoutubeMusicAlbumArt } from "./lib/ytAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
 
 const audioCache = new Map<string, { cdnUrl: string; fetchedAt: number }>();
@@ -173,8 +173,17 @@ app.get("/api/search", async (c) => {
     return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
   }
 
-  const results = await searchJioSaavnResults(q);
-  return c.json({ tracks: results, source: "jiosaavn" });
+  const [jioResults, ytResults] = await Promise.all([
+    searchJioSaavnResults(q),
+    searchYouTubeResults(q),
+  ]);
+
+  const merged = [
+    ...jioResults.map((t: any) => ({ ...t, source: "jiosaavn" })),
+    ...ytResults.map((t) => ({ ...t, source: "youtube" })),
+  ];
+
+  return c.json({ tracks: merged, source: "all" });
 });
 
 app.post("/api/resolve", async (c) => {

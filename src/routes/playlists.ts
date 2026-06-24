@@ -229,7 +229,6 @@ function isMatch(title: string, artist: string, expectedTitle: string, expectedA
 async function resolveTrackToJioSaavn(
   trackName: string,
   artistName: string,
-  expectedDurationMs?: number,
 ): Promise<{ videoId: string; image: string; durationMs: number }> {
   const timeout = new Promise<{ videoId: ""; image: ""; durationMs: 0 }>((_, reject) =>
     setTimeout(() => reject(new Error("resolveTrackToJioSaavn timed out")), 15000),
@@ -242,26 +241,15 @@ async function resolveTrackToJioSaavn(
         isMatch(r.name, r.artists[0]?.name || "", trackName, artistName)
       );
       if (match) {
-        const jioDuration = match.duration_ms;
-        const isWrong = expectedDurationMs && expectedDurationMs > 0
-          && Math.abs(jioDuration - expectedDurationMs) > 5000;
-        if (!isWrong) {
-          return {
-            videoId: match.videoId,
-            image: match.image,
-            durationMs: jioDuration,
-          };
-        }
-      }
-      if (!match) {
-        console.error(`[resolve] "${query}": no JioSaavn match among ${results.length} results`);
-        if (results.length > 0) {
-          console.error(`[resolve]   top result: "${results[0].name}" - "${results[0].artists[0]?.name}"`);
-        }
+        return {
+          videoId: match.videoId,
+          image: match.image,
+          durationMs: Number.isFinite(match.duration_ms) ? match.duration_ms : 0,
+        };
       }
       const yt = await searchYouTubeWithMetadata(query);
       if (yt) {
-        return { videoId: yt.videoId, image: yt.thumbnail, durationMs: yt.durationMs };
+        return { videoId: yt.videoId, image: yt.thumbnail, durationMs: Number.isFinite(yt.durationMs) ? yt.durationMs : 0 };
       }
     } catch (err) {
       console.error("JioSaavn search failed:", err);
@@ -879,9 +867,8 @@ playlistsRoute.post("/import", async (c) => {
           chunk.map(async (item: ScrapedSpotifyTrack) => {
             const trackName = item.trackName;
             const artistName = item.artistName;
-            const spotifyDuration = item.durationMs || 0;
 
-            const resolved = await resolveTrackToJioSaavn(trackName, artistName, spotifyDuration);
+            const resolved = await resolveTrackToJioSaavn(trackName, artistName);
             if (resolved.videoId) {
               return {
                 playlistId: newPlaylist.id,
