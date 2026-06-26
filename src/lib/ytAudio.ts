@@ -96,3 +96,33 @@ export async function getYoutubeMusicAlbumArt(name: string, artist?: string): Pr
     return null;
   }
 }
+
+export async function getYouTubeVideoInfo(videoId: string): Promise<{ title: string; artist: string; thumbnail: string } | null> {
+  try {
+    const yt = await getInnertube();
+    const info = await yt.getInfo(videoId);
+    return {
+      title: info.basic_info?.title || "",
+      artist: info.basic_info?.author || info.basic_info?.channel || "",
+      thumbnail: info.basic_info?.thumbnail?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    };
+  } catch (err) {
+    console.error(`[ytAudio] getYouTubeVideoInfo("${videoId}") failed:`, err);
+    return null;
+  }
+}
+
+export async function getYouTubeAudioUrl(videoId: string): Promise<string | null> {
+  try {
+    const yt = await getInnertube();
+    const info = await yt.getInfo(videoId);
+    const formats = info.streaming_data?.adaptive_formats || [];
+    const audio = formats
+      .filter((f: any) => f.mimeType?.startsWith("audio/"))
+      .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+    return audio?.url?.startsWith("http") ? audio.url : null;
+  } catch (err) {
+    console.error(`[ytAudio] getYouTubeAudioUrl("${videoId}") failed:`, err);
+    return null;
+  }
+}

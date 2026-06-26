@@ -85,3 +85,39 @@ export async function searchSpotify(query: string, limit = 10): Promise<SpotifyT
   setCache(cacheKey, results);
   return results;
 }
+
+export async function getSpotifyTrackById(id: string): Promise<SpotifyTrackResult | null> {
+  const cacheKey = `spotify:track:${id}`;
+  const cached = getCached(cacheKey);
+  if (cached) return cached as SpotifyTrackResult;
+
+  const token = await getToken();
+  const url = `https://api.spotify.com/v1/tracks/${id}`;
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(5000),
+  });
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      tokenCache = null;
+      return getSpotifyTrackById(id);
+    }
+    return null;
+  }
+
+  const t = await res.json();
+  const result: SpotifyTrackResult = {
+    id: t.id,
+    name: t.name,
+    artists: t.artists.map((a: any) => a.name).join(", "),
+    album: t.album?.name || "",
+    cover: t.album?.images?.[0]?.url || "",
+    duration_ms: t.duration_ms,
+    uri: t.uri,
+  };
+
+  setCache(cacheKey, result);
+  return result;
+}

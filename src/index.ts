@@ -14,8 +14,9 @@ import playlistsRoute from "./routes/playlists.js";
 import audioFallbackRoute from "./routes/audioFallback.js";
 import { handleWS } from "./ws/handler.js";
 import { resolveJioSaavn, resolveJioSaavnById, searchJioSaavnResults } from "./lib/jiosaavnAudio.js";
-import { searchYouTube, searchYouTubeResults, getYoutubeMusicAlbumArt } from "./lib/ytAudio.js";
+import { searchYouTube, searchYouTubeResults, getYoutubeMusicAlbumArt, getYouTubeVideoInfo, searchYouTubeWithMetadata, getYouTubeAudioUrl } from "./lib/ytAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
+
 
 const audioCache = new Map<string, { cdnUrl: string; fetchedAt: number }>();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
@@ -173,27 +174,8 @@ app.get("/api/search", async (c) => {
     return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
   }
 
-  const [jioResults, ytResults] = await Promise.all([
-    searchJioSaavnResults(q),
-    searchYouTubeResults(q),
-  ]);
-
-  const merged = [
-    ...jioResults.map((t: any) => ({ ...t })),
-    ...ytResults.map((t) => ({
-      id: `yt-${t.videoId}`,
-      videoId: t.videoId,
-      name: t.name,
-      duration_ms: t.durationMs,
-      explicit: false,
-      artists: [{ name: t.artist }],
-      album: { name: "" },
-      image: t.thumbnail,
-      source: "youtube",
-    })),
-  ];
-
-  return c.json({ tracks: merged });
+  const tracks = await searchJioSaavnResults(q);
+  return c.json({ tracks });
 });
 
 app.post("/api/resolve", async (c) => {
@@ -223,7 +205,7 @@ app.post("/api/resolve", async (c) => {
     jioResult = await resolveJioSaavnById(body.videoId, body.name);
   }
 
-  if (!jioResult && !isYouTubeId && body.name?.trim()) {
+  if (!jioResult && body.name?.trim()) {
     jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists);
   }
 
@@ -232,8 +214,86 @@ app.post("/api/resolve", async (c) => {
     return c.json({ source: "jiosaavn", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
   }
 
+  if (isYouTubeId) {
+    const ytAudioUrl = await getYouTubeAudioUrl(body.videoId);
+    if (ytAudioUrl) {
+      audioCache.set(body.videoId, { cdnUrl: ytAudioUrl, fetchedAt: Date.now() });
+      return c.json({ source: "jiosaavn", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
+    }
+  }
+
   const albumArt = body.name ? await getYoutubeMusicAlbumArt(body.name, body.artists) : undefined;
   return c.json({ source: "youtube", videoId: body.videoId, ...(albumArt ? { image: albumArt } : {}) });
+});
+
+function extractYouTubeId(url: string): string | null {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
+    /^([a-zA-Z0-9_-]{11})$/,
+  ];
+  for (const p of patterns) {
+    const m = url.match(p);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+app.post("/api/resolve-link", async (c) => {
+  const payload = await verifyAuth(c);
+  if (!payload) return c.json({ error: "Unauthorized" }, 401);
+
+  const { url } = await c.req.json();
+  if (!url?.trim()) return c.json({ error: "Missing url" }, 400);
+
+  const ip = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? "unknown";
+  const rl = await checkRateLimit(`resolve-link:${ip}`, 20);
+  if (!rl.success) return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
+
+  let videoId = extractYouTubeId(url.trim());
+  if (videoId) {
+    const info = await getYouTubeVideoInfo(videoId);
+    if (info) {
+      return c.json({ videoId, name: info.title, artist: info.artist, image: info.thumbnail, source: "youtube" });
+    }
+    return c.json({ videoId, name: "", artist: "", image: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`, source: "youtube" });
+  }
+
+  const spotifyMatch = url.match(/open\.spotify\.com\/track\/([a-zA-Z0-9]+)/);
+  if (spotifyMatch) {
+    try {
+      const oembedRes = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(url.trim())}`, { signal: AbortSignal.timeout(5000) });
+      if (oembedRes.ok) {
+        const oembed = await oembedRes.json() as any;
+        const trackName: string = oembed.title || "";
+        const thumb: string = oembed.thumbnail_url || "";
+
+        const queries = [trackName, `${trackName} official audio`, `${trackName} song`].filter(Boolean);
+        for (const q of [...new Set(queries)]) {
+          const results = await searchYouTubeResults(q);
+          if (results.length > 0) {
+            const r = results[0];
+            return c.json({ videoId: r.videoId, name: trackName || r.name, artist: r.artist, image: thumb || r.thumbnail, source: "youtube" });
+          }
+        }
+      }
+    } catch {}
+  }
+
+  const appleMatch = url.match(/music\.apple\.com\/([a-z]{2}\/)?.+?\/(.+?)\/(.+?)\/(\d+)/);
+  if (appleMatch) {
+    const query = url.split("/").filter((s: string) => s && !(/^[a-z]{2}$/).test(s)).slice(-3).join(" ").replace(/-/g, " ");
+    const yt = await searchYouTubeWithMetadata(query);
+    if (yt) {
+      return c.json({ videoId: yt.videoId, name: yt.videoId, artist: "", image: yt.thumbnail, source: "youtube" });
+    }
+  }
+
+  const yt = await searchYouTubeWithMetadata(url.trim());
+  if (yt) {
+    return c.json({ videoId: yt.videoId, name: url.trim(), artist: "", image: yt.thumbnail, source: "youtube" });
+  }
+
+  return c.json({ error: "Could not resolve link" }, 400);
 });
 
 app.get("/api/audio/:videoId", async (c) => {
@@ -261,10 +321,17 @@ app.get("/api/audio/:videoId", async (c) => {
   const videoId = c.req.param("videoId");
   if (!videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
 
-  const cached = audioCache.get(videoId);
+  let cached = audioCache.get(videoId);
   if (!cached || Date.now() - cached.fetchedAt > CACHE_TTL) {
     audioCache.delete(videoId);
-    return c.json({ error: "Audio not found or expired" }, 404);
+    if (/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+      const ytAudioUrl = await getYouTubeAudioUrl(videoId);
+      if (ytAudioUrl) {
+        cached = { cdnUrl: ytAudioUrl, fetchedAt: Date.now() };
+        audioCache.set(videoId, cached);
+      }
+    }
+    if (!cached) return c.json({ error: "Audio not found or expired" }, 404);
   }
 
   try {
