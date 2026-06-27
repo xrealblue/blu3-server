@@ -215,7 +215,7 @@ app.post("/api/resolve", async (c) => {
   }
 
   if (isYouTubeId) {
-    const ytAudioUrl = await getYouTubeAudioUrl(body.videoId, AbortSignal.timeout(4000));
+    const ytAudioUrl = await getYouTubeAudioUrl(body.videoId, AbortSignal.timeout(6000));
     if (ytAudioUrl) {
       audioCache.set(body.videoId, { cdnUrl: ytAudioUrl, fetchedAt: Date.now() });
       return c.json({ source: "jiosaavn", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
@@ -250,13 +250,14 @@ app.post("/api/resolve-link", async (c) => {
   if (!rl.success) return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
 
   const preResolveAudio = (vid: string) => {
-    getYouTubeAudioUrl(vid, AbortSignal.timeout(6000)).then((ytUrl) => {
-      if (ytUrl) audioCache.set(vid, { cdnUrl: ytUrl, fetchedAt: Date.now() });
-    }).catch(() => {});
+    getYouTubeAudioUrl(vid, AbortSignal.timeout(8000))
+      .then((ytUrl) => { if (ytUrl) audioCache.set(vid, { cdnUrl: ytUrl, fetchedAt: Date.now() }); })
+      .catch(() => {});
   };
 
   let videoId = extractYouTubeId(url.trim());
   if (videoId) {
+    preResolveAudio(videoId);
     const info = await getYouTubeVideoInfo(videoId);
     if (info) {
       return c.json({ videoId, name: info.title, artist: info.artist, image: info.thumbnail, source: "youtube" });

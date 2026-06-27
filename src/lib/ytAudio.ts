@@ -1,16 +1,14 @@
-import { createRequire } from "node:module";
+// ── ytmusic-api ──
 
-const require = createRequire(import.meta.url);
+import YTMusic from "ytmusic-api";
 
-// ── youtubei.js ──
-
-let innertubeInstance: any = null;
-async function getInnertube() {
-  if (!innertubeInstance) {
-    const { Innertube } = require("youtubei.js");
-    innertubeInstance = await Innertube.create({ generate_session_locally: true });
+let ytmusicInstance: YTMusic | null = null;
+async function getYTMusic(): Promise<YTMusic> {
+  if (!ytmusicInstance) {
+    ytmusicInstance = new YTMusic();
+    await ytmusicInstance.initialize();
   }
-  return innertubeInstance;
+  return ytmusicInstance;
 }
 
 export interface YouTubeSearchResult {
@@ -27,12 +25,15 @@ export interface YouTubeMusicSearchResult {
   durationMs: number;
 }
 
+function bestThumbnail(thumbnails: Array<{ url: string; width: number; height: number }>): string {
+  return thumbnails?.at(-1)?.url || "";
+}
+
 export async function searchYouTube(query: string): Promise<string | null> {
   try {
-    const yt = await getInnertube();
-    const results = await yt.music.search(query, { type: "song" });
-    const songs = results?.songs?.contents || [];
-    return songs[0]?.id || songs[0]?.videoId || null;
+    const yt = await getYTMusic();
+    const results = await yt.searchSongs(query);
+    return results[0]?.videoId || null;
   } catch (err) {
     console.error(`[ytAudio] searchYouTube("${query}") failed:`, err);
     return null;
@@ -41,17 +42,14 @@ export async function searchYouTube(query: string): Promise<string | null> {
 
 export async function searchYouTubeWithMetadata(query: string): Promise<YouTubeSearchResult | null> {
   try {
-    const yt = await getInnertube();
-    const results = await yt.music.search(query, { type: "song" });
-    const songs = results?.songs?.contents || [];
-    if (!songs[0]) return null;
-    const s = songs[0];
-    const thumbs = s.thumbnail?.contents || [];
-    const bestThumb = thumbs.find((t: any) => t.width >= 200) || thumbs[0];
+    const yt = await getYTMusic();
+    const results = await yt.searchSongs(query);
+    if (!results[0]) return null;
+    const s = results[0];
     return {
-      videoId: s.id || s.videoId,
-      thumbnail: bestThumb?.url || `https://i.ytimg.com/vi/${s.id}/hqdefault.jpg`,
-      durationMs: Number.isFinite(Number(s.duration)) ? Number(s.duration) * 1000 : 0,
+      videoId: s.videoId,
+      thumbnail: bestThumbnail(s.thumbnails) || `https://i.ytimg.com/vi/${s.videoId}/hqdefault.jpg`,
+      durationMs: (s.duration || 0) * 1000,
     };
   } catch (err) {
     console.error(`[ytAudio] searchYouTubeWithMetadata("${query}") failed:`, err);
@@ -61,20 +59,15 @@ export async function searchYouTubeWithMetadata(query: string): Promise<YouTubeS
 
 export async function searchYouTubeResults(query: string): Promise<YouTubeMusicSearchResult[]> {
   try {
-    const yt = await getInnertube();
-    const results = await yt.music.search(query, { type: "song" });
-    const songs = results?.songs?.contents || [];
-    return songs.slice(0, 10).map((s: any) => {
-      const thumbs = s.thumbnail?.contents || [];
-      const bestThumb = thumbs.find((t: any) => t.width >= 200) || thumbs[0];
-      return {
-        videoId: s.id || s.videoId,
-        name: s.name || s.title || "",
-        artist: s.artists?.[0]?.name || s.author?.name || "",
-        thumbnail: bestThumb?.url || "",
-        durationMs: Number.isFinite(Number(s.duration)) ? Number(s.duration) * 1000 : 0,
-      };
-    });
+    const yt = await getYTMusic();
+    const results = await yt.searchSongs(query);
+    return results.slice(0, 10).map((s) => ({
+      videoId: s.videoId,
+      name: s.name,
+      artist: s.artist?.name || "",
+      thumbnail: bestThumbnail(s.thumbnails) || "",
+      durationMs: (s.duration || 0) * 1000,
+    }));
   } catch (err) {
     console.error(`[ytAudio] searchYouTubeResults("${query}") failed:`, err);
     return [];
@@ -83,47 +76,54 @@ export async function searchYouTubeResults(query: string): Promise<YouTubeMusicS
 
 export async function getYoutubeMusicAlbumArt(name: string, artist?: string): Promise<string | null> {
   try {
-    const yt = await getInnertube();
+    const yt = await getYTMusic();
     const query = artist ? `${name} ${artist}` : name;
-    const results = await yt.music.search(query, { type: "song" });
-    const songs = results?.songs?.contents || [];
-    if (!songs[0]) return null;
-    const thumbs = songs[0].thumbnail?.contents || [];
-    const bestThumb = thumbs.find((t: any) => t.width >= 200) || thumbs[0];
-    return bestThumb?.url || null;
+    const results = await yt.searchSongs(query);
+    if (!results[0]) return null;
+    return bestThumbnail(results[0].thumbnails) || null;
   } catch (err) {
     console.error(`[ytAudio] getYoutubeMusicAlbumArt failed:`, err);
     return null;
   }
 }
 
-export async function getYouTubeVideoInfo(videoId: string): Promise<{ title: string; artist: string; thumbnail: string } | null> {
+export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal): Promise<string | null> {
   try {
-    const yt = await getInnertube();
-    const info = await yt.getInfo(videoId);
-    return {
-      title: info.basic_info?.title || "",
-      artist: info.basic_info?.author || info.basic_info?.channel || "",
-      thumbnail: info.basic_info?.thumbnail?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-    };
-  } catch (err) {
-    console.error(`[ytAudio] getYouTubeVideoInfo("${videoId}") failed:`, err);
+    const yt = await getYTMusic();
+    const song = await withSignal(yt.getSong(videoId), signal);
+    const formats = (song as any).adaptiveFormats || [];
+    const audio = formats
+      .filter((f: any) => f.mimeType?.startsWith("audio/"))
+      .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+    return audio?.url || null;
+  } catch (err: any) {
+    if (err?.name === "AbortError") return null;
+    console.error(`[ytAudio] getYouTubeAudioUrl("${videoId}") failed:`, err);
     return null;
   }
 }
 
-export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal): Promise<string | null> {
+function withSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    }),
+  ]);
+}
+
+export async function getYouTubeVideoInfo(videoId: string): Promise<{ title: string; artist: string; thumbnail: string } | null> {
   try {
-    const yt = await getInnertube();
-    const info = await yt.getInfo(videoId, undefined, signal);
-    const formats = info.streaming_data?.adaptive_formats || [];
-    const audio = formats
-      .filter((f: any) => f.mimeType?.startsWith("audio/"))
-      .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-    return audio?.url?.startsWith("http") ? audio.url : null;
-  } catch (err: any) {
-    if (err?.name === "AbortError" || err?.type === "aborted") return null;
-    console.error(`[ytAudio] getYouTubeAudioUrl("${videoId}") failed:`, err);
+    const yt = await getYTMusic();
+    const info = await yt.getSong(videoId);
+    return {
+      title: info.name || "",
+      artist: info.artist?.name || "",
+      thumbnail: bestThumbnail(info.thumbnails) || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    };
+  } catch (err) {
+    console.error(`[ytAudio] getYouTubeVideoInfo("${videoId}") failed:`, err);
     return null;
   }
 }

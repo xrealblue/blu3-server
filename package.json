@@ -29,7 +29,6 @@
     "nanoid": "^5.1.11",
     "postgres": "^3.4.9",
     "ws": "^8.21.0",
-    "youtubei.js": "^17.1.0",
     "yt-dlp-wrap": "^2.3.12",
     "ytdl-core-enhanced": "^2.3.0",
     "ytmusic-api": "^5.3.1"
