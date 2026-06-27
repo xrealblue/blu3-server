@@ -215,7 +215,7 @@ app.post("/api/resolve", async (c) => {
   }
 
   if (isYouTubeId) {
-    const ytAudioUrl = await getYouTubeAudioUrl(body.videoId);
+    const ytAudioUrl = await getYouTubeAudioUrl(body.videoId, AbortSignal.timeout(4000));
     if (ytAudioUrl) {
       audioCache.set(body.videoId, { cdnUrl: ytAudioUrl, fetchedAt: Date.now() });
       return c.json({ source: "jiosaavn", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
@@ -249,6 +249,12 @@ app.post("/api/resolve-link", async (c) => {
   const rl = await checkRateLimit(`resolve-link:${ip}`, 20);
   if (!rl.success) return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
 
+  const preResolveAudio = (vid: string) => {
+    getYouTubeAudioUrl(vid, AbortSignal.timeout(6000)).then((ytUrl) => {
+      if (ytUrl) audioCache.set(vid, { cdnUrl: ytUrl, fetchedAt: Date.now() });
+    }).catch(() => {});
+  };
+
   let videoId = extractYouTubeId(url.trim());
   if (videoId) {
     const info = await getYouTubeVideoInfo(videoId);
@@ -266,14 +272,49 @@ app.post("/api/resolve-link", async (c) => {
         const oembed = await oembedRes.json() as any;
         const trackName: string = oembed.title || "";
         const thumb: string = oembed.thumbnail_url || "";
+        let spotifyArtist = "";
 
-        const queries = [trackName, `${trackName} official audio`, `${trackName} song`].filter(Boolean);
+        try {
+          const pageRes = await fetch(url.trim(), { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(4000) });
+          if (pageRes.ok) {
+            const html = await pageRes.text();
+            const titleMatch = html.match(/<title>(.+?)<\/title>/i);
+            if (titleMatch) {
+              const parts = titleMatch[1].split(" · ").map((s: string) => s.trim());
+              if (parts.length >= 3) spotifyArtist = parts[1];
+            }
+          }
+        } catch {}
+
+        const nameLower = trackName.toLowerCase();
+        const artistLower = spotifyArtist.toLowerCase();
+        const queries = spotifyArtist ? [`${trackName} ${spotifyArtist}`, trackName] : [trackName];
         for (const q of [...new Set(queries)]) {
           const results = await searchYouTubeResults(q);
-          if (results.length > 0) {
-            const r = results[0];
-            return c.json({ videoId: r.videoId, name: trackName || r.name, artist: r.artist, image: thumb || r.thumbnail, source: "youtube" });
+          const match = results.find((r) => {
+            if (!r.videoId) return false;
+            if (!r.name) return false;
+            const rn = r.name.toLowerCase();
+            if (!rn.includes(nameLower) && !nameLower.includes(rn)) return false;
+            if (artistLower && r.artist) {
+              const ra = r.artist.toLowerCase();
+              const spotifyArtists = artistLower.split(/[,&]+\s*/).map((s: string) => s.trim());
+              const matchesArtist = spotifyArtists.some((a) => ra.includes(a) || a.includes(ra));
+              if (!matchesArtist) return false;
+            }
+            return true;
+          });
+          if (match) {
+            preResolveAudio(match.videoId);
+            return c.json({ videoId: match.videoId, name: trackName, artist: spotifyArtist || match.artist, image: thumb || match.thumbnail, source: "youtube" });
           }
+        }
+
+        const fb = await searchYouTubeResults(trackName);
+        const first = fb?.[0];
+        if (first?.videoId) {
+          preResolveAudio(first.videoId);
+          return c.json({ videoId: first.videoId, name: trackName, artist: spotifyArtist || first.artist, image: thumb || first.thumbnail, source: "youtube" });
         }
       }
     } catch {}
@@ -284,12 +325,14 @@ app.post("/api/resolve-link", async (c) => {
     const query = url.split("/").filter((s: string) => s && !(/^[a-z]{2}$/).test(s)).slice(-3).join(" ").replace(/-/g, " ");
     const yt = await searchYouTubeWithMetadata(query);
     if (yt) {
+      preResolveAudio(yt.videoId);
       return c.json({ videoId: yt.videoId, name: yt.videoId, artist: "", image: yt.thumbnail, source: "youtube" });
     }
   }
 
   const yt = await searchYouTubeWithMetadata(url.trim());
   if (yt) {
+    preResolveAudio(yt.videoId);
     return c.json({ videoId: yt.videoId, name: url.trim(), artist: "", image: yt.thumbnail, source: "youtube" });
   }
 
@@ -325,7 +368,7 @@ app.get("/api/audio/:videoId", async (c) => {
   if (!cached || Date.now() - cached.fetchedAt > CACHE_TTL) {
     audioCache.delete(videoId);
     if (/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-      const ytAudioUrl = await getYouTubeAudioUrl(videoId);
+      const ytAudioUrl = await getYouTubeAudioUrl(videoId, AbortSignal.timeout(6000));
       if (ytAudioUrl) {
         cached = { cdnUrl: ytAudioUrl, fetchedAt: Date.now() };
         audioCache.set(videoId, cached);

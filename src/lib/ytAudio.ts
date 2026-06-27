@@ -112,16 +112,17 @@ export async function getYouTubeVideoInfo(videoId: string): Promise<{ title: str
   }
 }
 
-export async function getYouTubeAudioUrl(videoId: string): Promise<string | null> {
+export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal): Promise<string | null> {
   try {
     const yt = await getInnertube();
-    const info = await yt.getInfo(videoId);
+    const info = await yt.getInfo(videoId, undefined, signal);
     const formats = info.streaming_data?.adaptive_formats || [];
     const audio = formats
       .filter((f: any) => f.mimeType?.startsWith("audio/"))
       .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
     return audio?.url?.startsWith("http") ? audio.url : null;
-  } catch (err) {
+  } catch (err: any) {
+    if (err?.name === "AbortError" || err?.type === "aborted") return null;
     console.error(`[ytAudio] getYouTubeAudioUrl("${videoId}") failed:`, err);
     return null;
   }
