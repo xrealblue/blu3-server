@@ -87,7 +87,7 @@ export async function getYoutubeMusicAlbumArt(name: string, artist?: string): Pr
   }
 }
 
-export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal): Promise<string | null> {
+eexport async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal): Promise<string | null> {
   try {
     const yt = await getYTMusic() as any;
     const data = await withSignal(yt.constructRequest("player", { videoId }), signal) as any;
