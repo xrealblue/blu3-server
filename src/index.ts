@@ -174,7 +174,18 @@ app.get("/api/search", async (c) => {
     return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
   }
 
-  const tracks = await searchJioSaavnResults(q);
+  // const tracks = await searchJioSaavnResults(q);
+  const ytResults = await searchYouTubeResults(q);
+  const tracks = ytResults.map((r) => ({
+    id: r.videoId,
+    videoId: r.videoId,
+    name: r.name,
+    duration_ms: r.durationMs,
+    artists: [{ name: r.artist || "Unknown" }],
+    album: { name: "" },
+    image: r.thumbnail,
+    source: "youtube" as const,
+  }));
   return c.json({ tracks });
 });
 
@@ -182,7 +193,7 @@ app.post("/api/resolve", async (c) => {
   const payload = await verifyAuth(c);
   if (!payload) return c.json({ error: "Unauthorized" }, 401);
 
-  let body: { videoId?: string; name?: string; artists?: string };
+  let body: { videoId?: string; name?: string; artists?: string; duration?: number };
   try {
     body = await c.req.json();
   } catch {
@@ -206,7 +217,7 @@ app.post("/api/resolve", async (c) => {
   }
 
   if (!jioResult && body.name?.trim()) {
-    jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists);
+    jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists, body.duration);
   }
 
   if (jioResult?.url) {

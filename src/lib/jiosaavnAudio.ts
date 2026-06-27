@@ -191,10 +191,17 @@ export async function resolveJioSaavnById(id: string, expectedName?: string): Pr
   }
 }
 
+function isDurationMatch(actualSec: number, expectedMs: number | undefined): boolean {
+  if (!expectedMs) return true;
+  if (!actualSec) return true;
+  return Math.abs(actualSec * 1000 - expectedMs) < 3000;
+}
+
 export async function resolveJioSaavn(
   videoId: string,
   name: string,
   artists?: string,
+  expectedDuration?: number,
 ): Promise<ResolveResult | null> {
   try {
     const query = normalizeQuery(name, artists);
@@ -208,10 +215,13 @@ export async function resolveJioSaavn(
     if (song.id) {
       const details = await getSongDetails(song.id);
       if (details?.encryptedUrl) {
+        if (!isDurationMatch(details.duration, expectedDuration)) return null;
         const url = getBestQualityUrl(details.encryptedUrl, details.has320);
         if (url) return { url, source: "jiosaavn", videoId };
       }
     }
+
+    if (!isDurationMatch(song.duration, expectedDuration)) return null;
 
     const url = getBestQualityUrl(song.encryptedUrl, song.has320);
     if (url) return { url, source: "jiosaavn", videoId };
