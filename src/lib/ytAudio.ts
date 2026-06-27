@@ -89,9 +89,9 @@ export async function getYoutubeMusicAlbumArt(name: string, artist?: string): Pr
 
 export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal): Promise<string | null> {
   try {
-    const yt = await getYTMusic();
-    const song = await withSignal(yt.getSong(videoId), signal);
-    const formats = (song as any).adaptiveFormats || [];
+    const yt = await getYTMusic() as any;
+    const data = await withSignal(yt.constructRequest("player", { videoId }), signal) as any;
+    const formats = data?.streamingData?.adaptiveFormats || [];
     const audio = formats
       .filter((f: any) => f.mimeType?.startsWith("audio/"))
       .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
