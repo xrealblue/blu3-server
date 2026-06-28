@@ -193,7 +193,7 @@ app.post("/api/resolve", async (c) => {
   const payload = await verifyAuth(c);
   if (!payload) return c.json({ error: "Unauthorized" }, 401);
 
-  let body: { videoId?: string; name?: string; artists?: string; duration?: number };
+  let body: { videoId?: string; name?: string; artists?: string; duration?: number; source?: string };
   try {
     body = await c.req.json();
   } catch {
@@ -212,12 +212,14 @@ app.post("/api/resolve", async (c) => {
   const isYouTubeId = /^[a-zA-Z0-9_-]{11}$/.test(body.videoId);
 
   let jioResult = null;
-  if (isNumericId) {
-    jioResult = await resolveJioSaavnById(body.videoId, body.name);
-  }
+  if (body.source !== "youtube") {
+    if (isNumericId) {
+      jioResult = await resolveJioSaavnById(body.videoId, body.name);
+    }
 
-  if (!jioResult && body.name?.trim()) {
-    jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists, body.duration);
+    if (!jioResult && body.name?.trim()) {
+      jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists, body.duration);
+    }
   }
 
   if (jioResult?.url) {
