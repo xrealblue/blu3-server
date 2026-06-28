@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { playlists, playlistTracks } from "../db/schema.js";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { searchJioSaavnResults } from "../lib/jiosaavnAudio.js";
-import { searchYouTube, searchYouTubeWithMetadata } from "../lib/ytAudio.js";
+import { searchYouTubeWithMetadata } from "../lib/ytAudio.js";
 import { getSessionFromRequest } from "../lib/auth.js";
 import { getCached, setCache } from "../lib/responseCache.js";
 
@@ -514,52 +514,6 @@ playlistsRoute.get("/:id", async (c) => {
   }
 });
 
-// POST /api/playlists — Create a custom blank playlist
-playlistsRoute.post("/", async (c) => {
-  const userId = c.get("userId");
-  const { name } = await c.req.json();
-  if (!name?.trim()) return c.json({ error: "Playlist name is required" }, 400);
-
-  try {
-    const [playlist] = await db
-      .insert(playlists)
-      .values({
-        userId,
-        name: name.trim(),
-        isLiked: false,
-      })
-      .returning();
-
-    return c.json({ playlist });
-  } catch (err) {
-    console.error("Failed to create playlist:", err);
-    return c.json({ error: "Failed to create playlist" }, 500);
-  }
-});
-
-// DELETE /api/playlists/:id — Delete custom playlist (not Liked Songs)
-playlistsRoute.delete("/:id", async (c) => {
-  const userId = c.get("userId");
-  const playlistId = c.req.param("id");
-
-  try {
-    const [playlist] = await db
-      .select()
-      .from(playlists)
-      .where(and(eq(playlists.id, playlistId), eq(playlists.userId, userId)))
-      .limit(1);
-
-    if (!playlist) return c.json({ error: "Playlist not found" }, 404);
-    if (playlist.isLiked) return c.json({ error: "Cannot delete Liked Songs playlist" }, 403);
-
-    await db.delete(playlists).where(eq(playlists.id, playlistId));
-    return c.json({ success: true });
-  } catch (err) {
-    console.error("Failed to delete playlist:", err);
-    return c.json({ error: "Failed to delete playlist" }, 500);
-  }
-});
-
 // POST /api/playlists/liked/toggle — Heart / Like button toggle action
 playlistsRoute.post("/liked/toggle", async (c) => {
   const userId = c.get("userId");
@@ -621,9 +575,8 @@ playlistsRoute.post("/liked/toggle", async (c) => {
   }
 });
 
-// POST /api/playlists/import — Import a YouTube, Spotify, JioSaavn, or Apple Music playlist, resolving all to JioSaavn songs
+// POST /api/playlists/import — Import a YouTube, Spotify, JioSaavn, or Apple Music playlist, returning resolved tracks directly (no DB save)
 playlistsRoute.post("/import", async (c) => {
-  const userId = c.get("userId");
   const { url } = await c.req.json();
   if (!url?.trim()) return c.json({ error: "Playlist link is required" }, 400);
 
@@ -636,9 +589,40 @@ playlistsRoute.post("/import", async (c) => {
     return c.json({ error: "Invalid playlist URL. Please provide a YouTube, Spotify, JioSaavn, or Apple Music link." }, 400);
   }
 
+  async function resolveChunked(
+    items: { trackName: string; artistName: string; image?: string; durationMs?: number }[],
+    chunkSize: number
+  ) {
+    const resolved: any[] = [];
+    const chunks = chunkArray(items, chunkSize);
+    for (const chunk of chunks) {
+      const results = await Promise.all(
+        chunk.map(async (item) => {
+          const r = await resolveTrackToJioSaavn(item.trackName, item.artistName);
+          if (r.videoId) {
+            return {
+              videoId: r.videoId,
+              trackName: item.trackName,
+              artistName: item.artistName,
+              image: r.image || item.image || "",
+              durationMs: r.durationMs || item.durationMs || 0,
+            };
+          }
+          return null;
+        })
+      );
+      for (const r of results) {
+        if (r) resolved.push(r);
+      }
+    }
+    return resolved;
+  }
+
   try {
+    let name = "Imported Playlist";
+    let tracks: any[] = [];
+
     if (isYouTube) {
-      // ── YouTube Import (scrape → YT Music API fallback → JioSaavn resolve) ──
       let scraped = await getYouTubePlaylistTracks(url);
       if (!scraped || scraped.tracks.length === 0) {
         const ytRegex = /[&?]list=([a-zA-Z0-9_-]+)/;
@@ -651,156 +635,42 @@ playlistsRoute.post("/import", async (c) => {
       if (!scraped || scraped.tracks.length === 0) {
         return c.json({ error: "Failed to fetch YouTube playlist. Ensure the playlist is public." }, 404);
       }
-
-      const [newPlaylist] = await db
-        .insert(playlists)
-        .values({
-          userId,
-          name: scraped.name,
-          isLiked: false,
-        })
-        .returning();
-
-      const tracksToInsert: any[] = [];
-      const chunks = chunkArray(scraped.tracks, 5);
-      let positionCounter = 0;
-
-      for (const chunk of chunks) {
-        const resolvedList = await Promise.all(
-          chunk.map(async (item: YouTubePlaylistTrack) => {
-            const resolved = await resolveTrackToJioSaavn(item.title, item.artist);
-            if (resolved.videoId) {
-              return {
-                playlistId: newPlaylist.id,
-                videoId: resolved.videoId,
-                trackName: item.title,
-                artistName: item.artist,
-                image: resolved.image,
-                durationMs: resolved.durationMs,
-              };
-            }
-            return null;
-          })
-        );
-
-        for (const item of resolvedList) {
-          if (item) {
-            tracksToInsert.push({ ...item, position: positionCounter++ });
-          }
-        }
-      }
-
-      if (tracksToInsert.length > 0) {
-        await db.insert(playlistTracks).values(tracksToInsert);
-      }
-
-      return c.json({ playlist: newPlaylist, trackCount: tracksToInsert.length });
+      name = scraped.name;
+      tracks = await resolveChunked(
+        scraped.tracks.map((t: any) => ({ trackName: t.title, artistName: t.artist })),
+        5
+      );
     } else if (isJioSaavn) {
-      // ── JioSaavn Import ──
       const scraped = await getJioSaavnPlaylistTracks(url);
       if (!scraped || scraped.tracks.length === 0) {
         return c.json({ error: "Failed to fetch JioSaavn playlist. Ensure the playlist is public." }, 404);
       }
-
-      const [newPlaylist] = await db
-        .insert(playlists)
-        .values({
-          userId,
-          name: scraped.name,
-          isLiked: false,
-        })
-        .returning();
-
-      const tracksToInsert: any[] = [];
-      const chunks = chunkArray(scraped.tracks, 5);
-      let positionCounter = 0;
-
-      for (const chunk of chunks) {
-        const resolvedList = await Promise.all(
-          chunk.map(async (item: JioSaavnPlaylistTrack) => ({
-            playlistId: newPlaylist.id,
-            videoId: item.id,
-            trackName: item.title,
-            artistName: item.artists,
-            image: item.image,
-            durationMs: item.duration * 1000,
-          }))
-        );
-
-        for (const item of resolvedList) {
-          if (item) {
-            tracksToInsert.push({ ...item, position: positionCounter++ });
-          }
-        }
-      }
-
-      if (tracksToInsert.length > 0) {
-        await db.insert(playlistTracks).values(tracksToInsert);
-      }
-
-      return c.json({ playlist: newPlaylist, trackCount: tracksToInsert.length });
+      name = scraped.name;
+      tracks = scraped.tracks.map((t: any) => ({
+        videoId: t.id,
+        trackName: t.title,
+        artistName: t.artists,
+        image: t.image || "",
+        durationMs: (t.duration || 0) * 1000,
+      }));
     } else if (isAppleMusic) {
-      // ── Apple Music Import ──
       const scraped = await getAppleMusicPlaylistTracks(url);
       if (!scraped || scraped.tracks.length === 0) {
         return c.json({ error: "Failed to fetch Apple Music playlist. Ensure the playlist is public." }, 404);
       }
-
-      const [newPlaylist] = await db
-        .insert(playlists)
-        .values({
-          userId,
-          name: scraped.name,
-          isLiked: false,
-        })
-        .returning();
-
-      const tracksToInsert: any[] = [];
-      const chunks = chunkArray(scraped.tracks, 5);
-      let positionCounter = 0;
-
-      for (const chunk of chunks) {
-        const resolvedList = await Promise.all(
-          chunk.map(async (item: ScrapedSpotifyTrack) => {
-            const resolved = await resolveTrackToJioSaavn(
-              item.trackName, item.artistName
-            );
-            if (resolved.videoId) {
-              return {
-                playlistId: newPlaylist.id,
-                videoId: resolved.videoId,
-                trackName: item.trackName,
-                artistName: item.artistName,
-                image: resolved.image,
-                durationMs: resolved.durationMs,
-              };
-            }
-            return null;
-          })
-        );
-
-        for (const item of resolvedList) {
-          if (item) {
-            tracksToInsert.push({ ...item, position: positionCounter++ });
-          }
-        }
-      }
-
-      if (tracksToInsert.length > 0) {
-        await db.insert(playlistTracks).values(tracksToInsert);
-      }
-
-      return c.json({ playlist: newPlaylist, trackCount: tracksToInsert.length });
+      name = scraped.name;
+      tracks = await resolveChunked(
+        scraped.tracks.map((t: any) => ({ trackName: t.trackName, artistName: t.artistName })),
+        5
+      );
     } else {
-      // ── Spotify Import ──
+      // Spotify
       const spotifyRegex = /playlist\/([a-zA-Z0-9]+)/;
       const match = url.match(spotifyRegex);
       const playlistId = match ? match[1] : null;
-
       if (!playlistId) return c.json({ error: "Could not parse Spotify playlist ID from URL" }, 400);
 
-      let playlistName = "Imported Spotify Playlist";
-      let tracksToResolve: ScrapedSpotifyTrack[] = [];
+      let tracksToResolve: { trackName: string; artistName: string; image?: string; durationMs?: number }[] = [];
       let fetchedSuccessfully = false;
 
       const clientId = process.env.SPOTIFY_CLIENT_ID;
@@ -814,31 +684,26 @@ playlistsRoute.post("/import", async (c) => {
               headers: { Authorization: `Bearer ${accessToken}` },
             });
             if (spotifyRes.ok) {
-              const playlistData = await spotifyRes.json();
-              playlistName = playlistData.name || "Imported Spotify Playlist";
-              const spotifyItems = playlistData.tracks?.items || [];
-              tracksToResolve = spotifyItems.map((item: any) => ({
+              const pd = await spotifyRes.json();
+              name = pd.name || "Imported Spotify Playlist";
+              tracksToResolve = (pd.tracks?.items || []).map((item: any) => ({
                 trackName: item?.track?.name || "Unknown Track",
                 artistName: item?.track?.artists?.map((a: any) => a.name).join(", ") || "Unknown Artist",
                 durationMs: item?.track?.duration_ms || 0,
               }));
               fetchedSuccessfully = true;
-            } else {
-              console.warn("Spotify API fetch failed with status:", spotifyRes.status);
             }
           }
         } catch (err) {
-          console.error("Spotify API process failed, falling back:", err);
+          console.error("Spotify API failed, falling back:", err);
         }
       }
 
       if (!fetchedSuccessfully) {
-        console.log("Using public Spotify Embed scraper fallback for playlist:", playlistId);
         const scraped = await getSpotifyPlaylistTracksViaEmbed(playlistId);
         if (scraped) {
-          playlistName = scraped.name;
+          name = scraped.name;
           tracksToResolve = scraped.tracks;
-          console.log(`Embed scraper returned ${tracksToResolve.length} tracks for playlist "${playlistName}"`);
           fetchedSuccessfully = true;
         }
       }
@@ -847,175 +712,13 @@ playlistsRoute.post("/import", async (c) => {
         return c.json({ error: "Failed to fetch Spotify playlist. Ensure the playlist is public." }, 404);
       }
 
-      const [newPlaylist] = await db
-        .insert(playlists)
-        .values({
-          userId,
-          name: playlistName,
-          isLiked: false,
-        })
-        .returning();
-
-      const tracksToInsert: any[] = [];
-
-      const chunks = chunkArray(tracksToResolve, 2);
-      let positionCounter = 0;
-
-      let failedCount = 0;
-      for (const chunk of chunks) {
-        const resolvedList = await Promise.all(
-          chunk.map(async (item: ScrapedSpotifyTrack) => {
-            const trackName = item.trackName;
-            const artistName = item.artistName;
-
-            const resolved = await resolveTrackToJioSaavn(trackName, artistName);
-            if (resolved.videoId) {
-              return {
-                playlistId: newPlaylist.id,
-                videoId: resolved.videoId,
-                trackName,
-                artistName,
-                image: resolved.image,
-                durationMs: resolved.durationMs,
-              };
-            }
-            console.error(`[Import] Failed to resolve: "${trackName}" - ${artistName}`);
-            return null;
-          })
-        );
-
-        for (const item of resolvedList) {
-          if (item) {
-            tracksToInsert.push({
-              ...item,
-              position: positionCounter++,
-            });
-          } else {
-            failedCount++;
-          }
-        }
-      }
-
-      if (tracksToInsert.length > 0) {
-        await db.insert(playlistTracks).values(tracksToInsert);
-      }
-
-      console.log(`[Import] Resolved ${tracksToInsert.length}/${tracksToResolve.length} tracks (${failedCount} failed)`);
-
-      return c.json({ playlist: newPlaylist, trackCount: tracksToInsert.length });
+      tracks = await resolveChunked(tracksToResolve, 2);
     }
+
+    return c.json({ name, tracks });
   } catch (err) {
     console.error("Playlist import failed:", err);
     return c.json({ error: "Playlist import failed" }, 500);
-  }
-});
-
-// DELETE /api/playlists/:id/tracks/:trackId — Delete a track from a custom playlist
-playlistsRoute.delete("/:id/tracks/:trackId", async (c) => {
-  const userId = c.get("userId");
-  const playlistId = c.req.param("id");
-  const trackId = c.req.param("trackId");
-
-  try {
-    const [playlist] = await db
-      .select()
-      .from(playlists)
-      .where(and(eq(playlists.id, playlistId), eq(playlists.userId, userId)))
-      .limit(1);
-
-    if (!playlist) return c.json({ error: "Playlist not found" }, 404);
-
-    await db
-      .delete(playlistTracks)
-      .where(and(eq(playlistTracks.playlistId, playlistId), eq(playlistTracks.id, trackId)));
-
-    return c.json({ success: true });
-  } catch (err) {
-    console.error("Failed to delete track from playlist:", err);
-    return c.json({ error: "Failed to delete track" }, 500);
-  }
-});
-
-// POST /api/playlists/:id/tracks — Add a track to a custom playlist
-playlistsRoute.post("/:id/tracks", async (c) => {
-  const userId = c.get("userId");
-  const playlistId = c.req.param("id");
-  const { videoId, trackName, artistName, image, durationMs } = await c.req.json();
-
-  if (!videoId || !trackName) {
-    return c.json({ error: "videoId and trackName are required" }, 400);
-  }
-
-  try {
-    const [playlist] = await db
-      .select()
-      .from(playlists)
-      .where(and(eq(playlists.id, playlistId), eq(playlists.userId, userId)))
-      .limit(1);
-
-    if (!playlist) return c.json({ error: "Playlist not found" }, 404);
-
-    const [maxPos] = await db
-      .select({ pos: playlistTracks.position })
-      .from(playlistTracks)
-      .where(eq(playlistTracks.playlistId, playlistId))
-      .orderBy(desc(playlistTracks.position))
-      .limit(1);
-
-    const nextPos = (maxPos?.pos ?? -1) + 1;
-
-    const [newTrack] = await db
-      .insert(playlistTracks)
-      .values({
-        playlistId,
-        videoId,
-        trackName,
-        artistName: artistName || "Unknown Artist",
-        image: image || "",
-        durationMs: durationMs || 0,
-        position: nextPos,
-      })
-      .returning();
-
-    return c.json({ track: newTrack });
-  } catch (err) {
-    console.error("Failed to add track to playlist:", err);
-    return c.json({ error: "Failed to add track" }, 500);
-  }
-});
-
-// PUT /api/playlists/:id/tracks/reorder — Reorder tracks in a playlist
-playlistsRoute.put("/:id/tracks/reorder", async (c) => {
-  const userId = c.get("userId");
-  const playlistId = c.req.param("id");
-  const { trackIds } = await c.req.json();
-
-  if (!Array.isArray(trackIds)) {
-    return c.json({ error: "trackIds array is required" }, 400);
-  }
-
-  try {
-    const [playlist] = await db
-      .select()
-      .from(playlists)
-      .where(and(eq(playlists.id, playlistId), eq(playlists.userId, userId)))
-      .limit(1);
-
-    if (!playlist) return c.json({ error: "Playlist not found" }, 404);
-
-    await Promise.all(
-      trackIds.map(async (trackId: string, idx: number) => {
-        await db
-          .update(playlistTracks)
-          .set({ position: idx })
-          .where(and(eq(playlistTracks.playlistId, playlistId), eq(playlistTracks.id, trackId)));
-      })
-    );
-
-    return c.json({ success: true });
-  } catch (err) {
-    console.error("Failed to reorder playlist tracks:", err);
-    return c.json({ error: "Failed to reorder tracks" }, 500);
   }
 });
 
