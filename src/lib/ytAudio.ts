@@ -7,6 +7,16 @@ async function getYTMusic(): Promise<YTMusic> {
   if (!ytmusicInstance) {
     ytmusicInstance = new YTMusic();
     await ytmusicInstance.initialize();
+    // Fallback when scraping fails (data center IPs / VM)
+    if (!(ytmusicInstance as any).apiKey) {
+      (ytmusicInstance as any).apiKey = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+      (ytmusicInstance as any).context = {
+        client: {
+          clientName: "WEB_REMIX",
+          clientVersion: "1.20250204.01.00",
+        },
+      };
+    }
   }
   return ytmusicInstance;
 }
