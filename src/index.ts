@@ -353,6 +353,19 @@ app.post("/api/resolve-link", async (c) => {
   return c.json({ error: "Could not resolve link" }, 400);
 });
 
+async function resolveAudioUrl(videoId: string): Promise<string | null> {
+  const isNumericId = /^\d+$/.test(videoId);
+  if (isNumericId) {
+    const jioResult = await resolveJioSaavnById(videoId, undefined);
+    if (jioResult?.url) return jioResult.url;
+  }
+  if (/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+    const ytAudioUrl = await getYouTubeAudioUrl(videoId, AbortSignal.timeout(6000));
+    if (ytAudioUrl) return ytAudioUrl;
+  }
+  return null;
+}
+
 app.get("/api/audio/:videoId", async (c) => {
   let session = await getSessionFromRequest(c.req.raw.headers);
   if (!session) {
@@ -381,15 +394,13 @@ app.get("/api/audio/:videoId", async (c) => {
   let cached = audioCache.get(videoId);
   if (!cached || Date.now() - cached.fetchedAt > CACHE_TTL) {
     audioCache.delete(videoId);
-    if (/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-      const ytAudioUrl = await getYouTubeAudioUrl(videoId, AbortSignal.timeout(6000));
-      if (ytAudioUrl) {
-        cached = { cdnUrl: ytAudioUrl, fetchedAt: Date.now() };
-        audioCache.set(videoId, cached);
-      }
+    const resolvedUrl = await resolveAudioUrl(videoId);
+    if (resolvedUrl) {
+      cached = { cdnUrl: resolvedUrl, fetchedAt: Date.now() };
+      audioCache.set(videoId, cached);
     }
-    if (!cached) return c.json({ error: "Audio not found or expired" }, 404);
   }
+  if (!cached) return c.json({ error: "Audio not found or expired" }, 404);
 
   try {
     const cdnRes = await fetch(cached.cdnUrl, {
@@ -412,6 +423,11 @@ app.get("/api/audio/:videoId", async (c) => {
     });
     responseHeaders["Cache-Control"] = "private, max-age=3600";
     responseHeaders["X-Content-Type-Options"] = "nosniff";
+    const origin = c.req.header("origin");
+    if (origin && corsOrigins.includes(origin)) {
+      responseHeaders["Access-Control-Allow-Origin"] = origin;
+      responseHeaders["Access-Control-Allow-Credentials"] = "true";
+    }
 
     return c.newResponse(cdnRes.body as any, cdnRes.status as any, responseHeaders);
   } catch (err) {
