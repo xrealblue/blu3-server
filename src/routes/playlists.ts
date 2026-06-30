@@ -229,8 +229,8 @@ function isMatch(title: string, artist: string, expectedTitle: string, expectedA
 async function resolveTrackToJioSaavn(
   trackName: string,
   artistName: string,
-): Promise<{ videoId: string; image: string; durationMs: number }> {
-  const timeout = new Promise<{ videoId: ""; image: ""; durationMs: 0 }>((_, reject) =>
+): Promise<{ videoId: string; source: string; image: string; durationMs: number }> {
+  const timeout = new Promise<{ videoId: ""; source: ""; image: ""; durationMs: 0 }>((_, reject) =>
     setTimeout(() => reject(new Error("resolveTrackToJioSaavn timed out")), 15000),
   );
   const resolve = (async () => {
@@ -243,18 +243,19 @@ async function resolveTrackToJioSaavn(
       if (match) {
         return {
           videoId: match.videoId,
+          source: "jiosaavn",
           image: match.image,
           durationMs: Number.isFinite(match.duration_ms) ? match.duration_ms : 0,
         };
       }
       const yt = await searchYouTubeWithMetadata(query);
       if (yt) {
-        return { videoId: yt.videoId, image: yt.thumbnail, durationMs: Number.isFinite(yt.durationMs) ? yt.durationMs : 0 };
+        return { videoId: yt.videoId, source: "youtube", image: yt.thumbnail, durationMs: Number.isFinite(yt.durationMs) ? yt.durationMs : 0 };
       }
     } catch (err) {
       console.error("JioSaavn search failed:", err);
     }
-    return { videoId: "", image: "", durationMs: 0 };
+    return { videoId: "", source: "", image: "", durationMs: 0 };
   })();
   return Promise.race([resolve, timeout]);
 }
@@ -602,6 +603,7 @@ playlistsRoute.post("/import", async (c) => {
           if (r.videoId) {
             return {
               videoId: r.videoId,
+              source: r.source,
               trackName: item.trackName,
               artistName: item.artistName,
               image: r.image || item.image || "",
@@ -648,6 +650,7 @@ playlistsRoute.post("/import", async (c) => {
       name = scraped.name;
       tracks = scraped.tracks.map((t: any) => ({
         videoId: t.id,
+        source: "jiosaavn",
         trackName: t.title,
         artistName: t.artists,
         image: t.image || "",
