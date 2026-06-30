@@ -35,8 +35,19 @@ export interface YouTubeMusicSearchResult {
   durationMs: number;
 }
 
+function upscaleThumbnail(url: string): string {
+  if (!url) return url;
+  if (url.includes("i.ytimg.com/vi/")) {
+    return url.replace(/\/[a-z]+default\.jpg$/, "/maxresdefault.jpg");
+  }
+  if (url.includes("googleusercontent.com")) {
+    return url.replace(/=s\d+/, "=s1080").replace(/=w\d+-h\d+/, "=s1080");
+  }
+  return url;
+}
+
 function bestThumbnail(thumbnails: Array<{ url: string; width: number; height: number }>): string {
-  return thumbnails?.at(-1)?.url || "";
+  return upscaleThumbnail(thumbnails?.at(-1)?.url || "");
 }
 
 export async function searchYouTube(query: string): Promise<string | null> {
@@ -58,7 +69,7 @@ export async function searchYouTubeWithMetadata(query: string): Promise<YouTubeS
     const s = results[0];
     return {
       videoId: s.videoId,
-      thumbnail: bestThumbnail(s.thumbnails) || `https://i.ytimg.com/vi/${s.videoId}/hqdefault.jpg`,
+      thumbnail: bestThumbnail(s.thumbnails) || `https://i.ytimg.com/vi/${s.videoId}/maxresdefault.jpg`,
       durationMs: (s.duration || 0) * 1000,
     };
   } catch (err) {
@@ -130,7 +141,7 @@ export async function getYouTubeVideoInfo(videoId: string): Promise<{ title: str
     return {
       title: info.name || "",
       artist: info.artist?.name || "",
-      thumbnail: bestThumbnail(info.thumbnails) || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      thumbnail: bestThumbnail(info.thumbnails) || `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
     };
   } catch (err) {
     console.error(`[ytAudio] getYouTubeVideoInfo("${videoId}") failed:`, err);
