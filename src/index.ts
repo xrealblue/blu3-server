@@ -235,6 +235,14 @@ app.post("/api/resolve", async (c) => {
     }
   }
 
+  // Fallback: videoId isn't a real YouTube ID and JioSaavn failed — search YouTube by name
+  if (!isYouTubeId && body.name?.trim()) {
+    const yt = await searchYouTubeWithMetadata(`${body.name} ${body.artists || ""}`.trim());
+    if (yt?.videoId) {
+      return c.json({ source: "youtube", videoId: yt.videoId, image: yt.thumbnail });
+    }
+  }
+
   const albumArt = body.name ? await getYoutubeMusicAlbumArt(body.name, body.artists) : undefined;
   return c.json({ source: "youtube", videoId: body.videoId, ...(albumArt ? { image: albumArt } : {}) });
 });
