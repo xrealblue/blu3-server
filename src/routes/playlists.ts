@@ -305,7 +305,7 @@ async function getJioSaavnPlaylistTracks(url: string): Promise<{ name: string; t
         id: s.id || "",
         title: s.song || s.title || "Unknown Track",
         artists: s.primary_artists || s.singers || s.music || "Unknown Artist",
-        image: (s.image || "").replace("150x150", "500x500").replace("50x50", "500x500"),
+        image: (s.image || "").replace("150x150", "500x500").replace("50x50", "500x500").replace("1080x1080", "500x500"),
         duration: Number(s.duration) || 0,
       })),
     };

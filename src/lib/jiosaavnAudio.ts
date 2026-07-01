@@ -82,7 +82,7 @@ async function searchJioSaavn(query: string): Promise<JioSong | null> {
     title: raw.song || raw.title || "",
     album: raw.album || "",
     artists: raw.primary_artists || raw.singers || raw.music || "",
-    image: (raw.image || "").replace("150x150", "500x500").replace("50x50", "500x500"),
+    image: (raw.image || "").replace("150x150", "500x500").replace("50x50", "500x500").replace("1080x1080", "500x500"),
     duration: Number(raw.duration) || 0,
     has320: raw["320kbps"] === "true" || raw["320kbps"] === true,
     encryptedUrl: raw.encrypted_media_url || "",
@@ -115,7 +115,7 @@ async function getSongDetails(id: string): Promise<JioSong | null> {
     title: raw.song || raw.title || "",
     album: raw.album || "",
     artists: raw.primary_artists || raw.singers || raw.music || "",
-    image: (raw.image || "").replace("150x150", "500x500").replace("50x50", "500x500"),
+    image: (raw.image || "").replace("150x150", "500x500").replace("50x50", "500x500").replace("1080x1080", "500x500"),
     duration: Number(raw.duration) || 0,
     has320: raw["320kbps"] === "true" || raw["320kbps"] === true,
     encryptedUrl: raw.encrypted_media_url || "",
@@ -168,7 +168,7 @@ export async function searchJioSaavnResults(query: string): Promise<JioSearchTra
       duration_ms: (Number(raw.duration) || 0) * 1000,
       artists: [{ name: raw.primary_artists || raw.singers || raw.music || "Unknown" }],
       album: { name: raw.album || "" },
-image: (raw.image || "").replace("150x150", "500x500").replace("50x50", "500x500"),
+image: (raw.image || "").replace("150x150", "500x500").replace("50x50", "500x500").replace("1080x1080", "500x500"),
       source: "jiosaavn",
     }));
   } catch (err) {
