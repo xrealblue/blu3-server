@@ -88,6 +88,7 @@ async function getSpotifyPlaylistTracksViaEmbed(playlistId: string): Promise<{ n
     const tracks = trackList.map((item: any) => ({
       trackName: item.title || "Unknown Track",
       artistName: item.subtitle || "Unknown Artist",
+      image: item.image || "",
     }));
     
     return { name, tracks };
@@ -230,13 +231,16 @@ async function resolveTrackToJioSaavn(
   trackName: string,
   artistName: string,
 ): Promise<{ videoId: string; source: string; image: string; durationMs: number }> {
-  const timeout = new Promise<{ videoId: ""; source: ""; image: ""; durationMs: 0 }>((_, reject) =>
-    setTimeout(() => reject(new Error("resolveTrackToJioSaavn timed out")), 15000),
+  const timeout = new Promise<{ videoId: ""; source: ""; image: ""; durationMs: 0 }>((resolve) =>
+    setTimeout(() => resolve({ videoId: "", source: "", image: "", durationMs: 0 }), 15000),
   );
   const resolve = (async () => {
     const query = `${trackName} ${artistName !== "Unknown Artist" ? artistName : ""}`.trim();
     try {
-      const results = await searchJioSaavnResults(query);
+      const [results, yt] = await Promise.all([
+        searchJioSaavnResults(query),
+        searchYouTubeWithMetadata(query).catch(() => null),
+      ]);
       const match = results.find((r) =>
         isMatch(r.name, r.artists[0]?.name || "", trackName, artistName)
       );
@@ -244,11 +248,10 @@ async function resolveTrackToJioSaavn(
         return {
           videoId: match.videoId,
           source: "jiosaavn",
-          image: match.image,
+          image: yt?.thumbnail || match.image,
           durationMs: Number.isFinite(match.duration_ms) ? match.duration_ms : 0,
         };
       }
-      const yt = await searchYouTubeWithMetadata(query);
       if (yt) {
         return { videoId: yt.videoId, source: "youtube", image: yt.thumbnail, durationMs: Number.isFinite(yt.durationMs) ? yt.durationMs : 0 };
       }
@@ -302,7 +305,7 @@ async function getJioSaavnPlaylistTracks(url: string): Promise<{ name: string; t
         id: s.id || "",
         title: s.song || s.title || "Unknown Track",
         artists: s.primary_artists || s.singers || s.music || "Unknown Artist",
-        image: (s.image || "").replace("150x150", "1080x1080").replace("50x50", "1080x1080").replace("500x500", "1080x1080"),
+        image: (s.image || "").replace("150x150", "500x500").replace("50x50", "500x500"),
         duration: Number(s.duration) || 0,
       })),
     };
@@ -692,6 +695,7 @@ playlistsRoute.post("/import", async (c) => {
               tracksToResolve = (pd.tracks?.items || []).map((item: any) => ({
                 trackName: item?.track?.name || "Unknown Track",
                 artistName: item?.track?.artists?.map((a: any) => a.name).join(", ") || "Unknown Artist",
+                image: item?.track?.album?.images?.[0]?.url || "",
                 durationMs: item?.track?.duration_ms || 0,
               }));
               fetchedSuccessfully = true;
