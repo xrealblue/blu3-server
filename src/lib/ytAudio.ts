@@ -108,10 +108,17 @@ export async function getYoutubeMusicAlbumArt(name: string, artist?: string): Pr
   }
 }
 
-export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal): Promise<string | null> {
+export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal, depth = 0): Promise<string | null> {
+  if (depth > 2) return null;
   try {
     const yt = await getYTMusic() as any;
     const data = await withSignal(yt.constructRequest("player", { videoId }), signal) as any;
+    const actualVideoId = data?.videoDetails?.videoId;
+    if (actualVideoId && actualVideoId !== videoId) {
+      // YouTube redirected the requested videoId to a different video (common in mix/radio URLs).
+      // Re-fetch with the actual videoId to get the correct streaming data.
+      return getYouTubeAudioUrl(actualVideoId, signal, depth + 1);
+    }
     const formats = data?.streamingData?.adaptiveFormats || [];
     const audio = formats
       .filter((f: any) => f.mimeType?.startsWith("audio/"))

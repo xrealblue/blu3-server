@@ -281,6 +281,24 @@ app.post("/api/resolve-link", async (c) => {
     if (info) {
       return c.json({ videoId, name: info.title, artist: info.artist, image: info.thumbnail, source: "youtube" });
     }
+    // getYouTubeVideoInfo failed — YouTube may have redirected the videoId in a mix/radio context.
+    // Fall back to the oEmbed API which always returns correct metadata for any valid video URL.
+    try {
+      const oembedRes = await fetch(
+        `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`,
+        { signal: AbortSignal.timeout(3000) },
+      );
+      if (oembedRes.ok) {
+        const oembed: any = await oembedRes.json();
+        return c.json({
+          videoId,
+          name: oembed.title || "",
+          artist: oembed.author_name || "",
+          image: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
+          source: "youtube",
+        });
+      }
+    } catch {}
     return c.json({ videoId, name: "", artist: "", image: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`, source: "youtube" });
   }
 
