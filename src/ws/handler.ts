@@ -283,8 +283,13 @@ export async function handleWS(ws: any, url: URL) {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
           if (!msg.videoId) return;
 
-          const seekTo = clampTime(msg.currentTime);
           const currentTl = await getPlayback(roomCode);
+
+          // Resume from pause: the server has the authoritative position, not the client's
+          // potentially stale polled value (client's currentTime is React state updated every 3s).
+          let seekTo = currentTl?.videoId === msg.videoId && !currentTl?.isPlaying
+            ? currentTl.currentTime
+            : clampTime(msg.currentTime);
 
           if (currentTl?.videoId && currentTl.videoId !== msg.videoId && currentTl.isPlaying) {
             pushTrackHistory(dbRoom.id, {
