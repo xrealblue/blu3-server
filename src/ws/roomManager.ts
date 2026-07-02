@@ -34,6 +34,9 @@ export interface PlaybackState {
   isPlaying: boolean;
   currentTime: number;
   updatedAt: number;
+  startedAt: number;
+  pausedDurationMs: number;
+  durationMs: number;
 }
 
 export interface RecentTrack {
@@ -114,6 +117,9 @@ export class RoomManager {
       isPlaying: tl.isPlaying,
       currentTime: currentPosition(tl, Date.now()),
       updatedAt: Date.now(),
+      startedAt: tl.startedAt,
+      pausedDurationMs: tl.pausedDurationMs,
+      durationMs: tl.durationMs,
     };
   }
 
@@ -240,6 +246,9 @@ export async function setPlayback(code: string, state: Partial<PlaybackState> & 
   if (state.isPlaying !== undefined) next.isPlaying = state.isPlaying;
   if (state.currentTime !== undefined) next.positionSec = state.currentTime;
   if (state.updatedAt !== undefined) next.anchorServerTime = state.updatedAt;
+  if (state.startedAt !== undefined) next.startedAt = state.startedAt;
+  if (state.pausedDurationMs !== undefined) next.pausedDurationMs = state.pausedDurationMs;
+  if (state.durationMs !== undefined) next.durationMs = state.durationMs;
   if (next.isPlaying !== undefined || next.positionSec !== undefined || next.anchorServerTime !== undefined) {
     next.anchorServerTime = state.updatedAt ?? Date.now();
   }
@@ -291,4 +300,8 @@ export function pushRecentTrack(code: string, track: RecentTrack) {
 
 export function getRecentTracks(code: string): RecentTrack[] {
   return legacyManager.getRecentTracks(code);
+}
+
+export async function getTimeline(code: string): Promise<TimelineState> {
+  return legacyManager.getTimeline(code);
 }

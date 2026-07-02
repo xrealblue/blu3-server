@@ -6,6 +6,9 @@ export interface TimelineSnapshot {
   isPlaying: boolean;
   positionSec: number;
   anchorServerTime: number;
+  startedAt: number;
+  pausedDurationMs: number;
+  durationMs: number;
 }
 
 export function currentPosition(timeline: TimelineSnapshot, serverNow: number): number {
@@ -33,6 +36,7 @@ export function createPlaySnapshot(
   image: string,
   seekToSec: number,
   serverNow: number,
+  durationMs = 0,
 ): TimelineSnapshot {
   return {
     videoId,
@@ -42,6 +46,22 @@ export function createPlaySnapshot(
     isPlaying: true,
     positionSec: seekToSec,
     anchorServerTime: serverNow,
+    startedAt: serverNow,
+    pausedDurationMs: 0,
+    durationMs,
+  };
+}
+
+export function createResumeSnapshot(
+  timeline: TimelineSnapshot,
+  serverNow: number,
+): TimelineSnapshot {
+  const pauseElapsed = serverNow - timeline.anchorServerTime;
+  return {
+    ...timeline,
+    isPlaying: true,
+    anchorServerTime: serverNow,
+    pausedDurationMs: timeline.pausedDurationMs + Math.max(0, pauseElapsed),
   };
 }
 
@@ -55,6 +75,18 @@ export function createPauseSnapshot(
     positionSec: currentPosition(timeline, serverNow),
     anchorServerTime: serverNow,
   };
+}
+
+export function effectiveElapsedMs(timeline: TimelineSnapshot, serverNow: number): number {
+  if (!timeline.startedAt) return 0;
+  const wallMs = serverNow - timeline.startedAt;
+  const pausedMs = timeline.pausedDurationMs;
+  if (!timeline.isPlaying) {
+    // While paused, account for current pause session too
+    const currentPauseMs = serverNow - timeline.anchorServerTime;
+    return Math.max(0, wallMs - pausedMs - currentPauseMs);
+  }
+  return Math.max(0, wallMs - pausedMs);
 }
 
 export function createSeekSnapshot(

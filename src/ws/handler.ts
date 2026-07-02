@@ -20,11 +20,13 @@ import {
   moveQueueTrackToEnd,
   type QueueTrack,
   type RepeatMode,
+  type PlaybackState,
   clearQueue,
   getPlayback,
   setPlayback,
+  getTimeline,
 } from "./roomManager.js";
-import { createPauseSnapshot } from "../lib/timeline.js";
+import { createPauseSnapshot, createResumeSnapshot, effectiveElapsedMs } from "../lib/timeline.js";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
 import { rooms, roomQueue } from "../db/schema.js";
@@ -35,6 +37,113 @@ const MAX_SEEK_SEC = 3600;
 function clampTime(v: number | undefined | null, max = MAX_SEEK_SEC): number {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? Math.max(0, Math.min(n, max)) : 0;
+}
+
+// ── Server-side auto-advance timers ──────────────────────
+const advanceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelTrackEnd(roomCode: string) {
+  const existing = advanceTimers.get(roomCode);
+  if (existing) {
+    clearTimeout(existing);
+    advanceTimers.delete(roomCode);
+  }
+}
+
+async function handleTrackEnd(roomCode: string) {
+  advanceTimers.delete(roomCode);
+  const tl = await getTimeline(roomCode);
+  if (!tl.isPlaying || !tl.videoId) return;
+
+  const serverNow = Date.now();
+
+  // Verify the track has actually elapsed enough — the timer may have fired
+  // early if the user paused between scheduling and now.
+  if (tl.durationMs > 0) {
+    const elapsedMs = effectiveElapsedMs(tl, serverNow);
+    const remainingMs = Math.max(1000, tl.durationMs - elapsedMs);
+    if (remainingMs < 86400000) {
+      scheduleTrackEnd(roomCode, remainingMs);
+      return;
+    }
+  }
+
+  const [roomRow] = await db.select().from(rooms).where(eq(rooms.code, roomCode)).limit(1);
+  if (!roomRow) return;
+
+  await pushTrackHistory(roomRow.id, {
+    videoId: tl.videoId,
+    trackName: tl.trackName ?? "",
+    artistName: tl.artistName ?? "",
+    image: tl.image ?? "",
+  }).catch(console.error);
+
+  pushRecentTrack(roomCode, {
+    videoId: tl.videoId,
+    source: tl.source ?? "youtube",
+    trackName: tl.trackName ?? "",
+    artistName: tl.artistName ?? "",
+    image: tl.image ?? "",
+    playedAt: serverNow,
+  });
+
+  const q = await getQueue(roomCode);
+  const endedTrack = q.find((t) => t.videoId === tl.videoId || t.id === tl.videoId);
+  if (endedTrack) await moveQueueTrackToEnd(roomCode, endedTrack.id);
+
+  const nextTrack = q.length > 1 ? q[1] ?? q[0] : q[0];
+  if (nextTrack && nextTrack.videoId) {
+    await setPlayback(roomCode, {
+      videoId: nextTrack.videoId,
+      source: nextTrack.source ?? "youtube",
+      trackName: nextTrack.name ?? "",
+      artistName: nextTrack.artists?.[0]?.name ?? "",
+      image: nextTrack.image ?? "",
+      isPlaying: true,
+      currentTime: 0,
+      startedAt: serverNow,
+      pausedDurationMs: 0,
+      durationMs: nextTrack.duration_ms ?? 0,
+      updatedAt: serverNow,
+    });
+
+    const nextDurMs = nextTrack.duration_ms ?? 0;
+    if (nextDurMs > 0) {
+      scheduleTrackEnd(roomCode, nextDurMs);
+    }
+
+    broadcast(roomCode, {
+      type: "play",
+      videoId: nextTrack.videoId,
+      source: nextTrack.source ?? "youtube",
+      seekTo: 0,
+      serverTime: serverNow,
+      anchorServerTime: serverNow,
+      id: nextTrack.id || `room-${nextTrack.videoId}`,
+      trackName: nextTrack.name ?? "",
+      artistName: nextTrack.artists?.[0]?.name ?? "",
+      image: nextTrack.image ?? "",
+      duration_ms: nextDurMs,
+      recentTracks: getRecentTracks(roomCode),
+    });
+  } else {
+    await setPlayback(roomCode, { isPlaying: false, updatedAt: serverNow });
+  }
+
+  broadcast(roomCode, {
+    type: "room:queue_update",
+    queue: await getQueue(roomCode),
+    recentTracks: getRecentTracks(roomCode),
+  });
+  scheduleQueueSync(roomRow.id, roomCode);
+}
+
+function scheduleTrackEnd(roomCode: string, delayMs: number) {
+  cancelTrackEnd(roomCode);
+  if (delayMs <= 0 || delayMs > 86400000) return;
+  advanceTimers.set(roomCode, setTimeout(() => {
+    handleTrackEnd(roomCode);
+  }, delayMs));
 }
 
 export type WSMessage =
@@ -284,11 +393,11 @@ export async function handleWS(ws: any, url: URL) {
           if (!msg.videoId) return;
 
           const currentTl = await getPlayback(roomCode);
+          const isResume = currentTl?.videoId === msg.videoId && !currentTl?.isPlaying;
 
-          // Resume from pause: the server has the authoritative position, not the client's
-          // potentially stale polled value (client's currentTime is React state updated every 3s).
-          let seekTo = currentTl?.videoId === msg.videoId && !currentTl?.isPlaying
-            ? currentTl.currentTime
+          // Resume from pause: the server has the authoritative position
+          let seekTo = isResume
+            ? currentTl!.currentTime
             : clampTime(msg.currentTime);
 
           if (currentTl?.videoId && currentTl.videoId !== msg.videoId && currentTl.isPlaying) {
@@ -314,9 +423,13 @@ export async function handleWS(ws: any, url: URL) {
             if (oldTrack) await moveQueueTrackToEnd(roomCode, oldTrack.id);
           }
 
+          const isNewTrack = !currentTl?.videoId || currentTl.videoId !== msg.videoId;
           const source = "youtube";
 
-          await setPlayback(roomCode, {
+          // Cancel old advance timer — will reschedule below
+          cancelTrackEnd(roomCode);
+
+          const setState: Partial<PlaybackState> & { updatedAt?: number } = {
             videoId: msg.videoId,
             source,
             trackName: msg.trackName ?? "",
@@ -324,8 +437,44 @@ export async function handleWS(ws: any, url: URL) {
             image: msg.image ?? "",
             isPlaying: true,
             currentTime: seekTo,
+            durationMs: msg.duration_ms ?? 0,
             updatedAt: serverNow,
-          });
+          };
+
+          if (isNewTrack) {
+            setState.startedAt = serverNow;
+            setState.pausedDurationMs = 0;
+          } else {
+            // Resume: keep original startedAt, accumulate pause duration
+            const resumeSnapshot = createResumeSnapshot(
+              {
+                videoId: currentTl!.videoId,
+                trackName: currentTl!.trackName ?? "",
+                artistName: currentTl!.artistName ?? "",
+                image: currentTl!.image ?? "",
+                isPlaying: false,
+                positionSec: currentTl!.currentTime,
+                anchorServerTime: currentTl!.updatedAt,
+                startedAt: currentTl!.startedAt,
+                pausedDurationMs: currentTl!.pausedDurationMs,
+                durationMs: currentTl!.durationMs,
+              },
+              serverNow,
+            );
+            setState.startedAt = resumeSnapshot.startedAt;
+            setState.pausedDurationMs = resumeSnapshot.pausedDurationMs;
+          }
+
+          await setPlayback(roomCode, setState);
+
+          // Server-side auto-advance: schedule a check when this track should end.
+          // The timeout fires at the expected end time; the callback verifies the
+          // same track is still playing before advancing.
+          const durMs = msg.duration_ms ?? 0;
+          const remainingMs = Math.max(1000, durMs - seekTo * 1000);
+          if (durMs > 0 && remainingMs < 86400000) {
+            scheduleTrackEnd(roomCode, remainingMs);
+          }
 
           scheduleQueueSync(dbRoom.id, roomCode);
 
@@ -342,13 +491,15 @@ export async function handleWS(ws: any, url: URL) {
             trackName: msg.trackName ?? "",
             artistName: msg.artistName ?? "",
             image: msg.image ?? "",
-            duration_ms: msg.duration_ms ?? 0,
+            duration_ms: durMs,
             recentTracks: getRecentTracks(roomCode),
           });
           break;
         }
         case "playback:pause": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
+
+          cancelTrackEnd(roomCode);
 
           const currentTl = await getPlayback(roomCode);
           const pauseSnapshot = createPauseSnapshot(
@@ -360,6 +511,9 @@ export async function handleWS(ws: any, url: URL) {
               isPlaying: currentTl?.isPlaying ?? false,
               positionSec: currentTl?.currentTime ?? 0,
               anchorServerTime: currentTl?.updatedAt ?? serverNow,
+              startedAt: currentTl?.startedAt ?? 0,
+              pausedDurationMs: currentTl?.pausedDurationMs ?? 0,
+              durationMs: currentTl?.durationMs ?? 0,
             },
             serverNow,
           );
@@ -381,6 +535,8 @@ export async function handleWS(ws: any, url: URL) {
         case "playback:seek": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
 
+          cancelTrackEnd(roomCode);
+
           const seekTo = clampTime(msg.currentTime);
 
           await setPlayback(roomCode, {
@@ -398,6 +554,9 @@ export async function handleWS(ws: any, url: URL) {
         }
         case "playback:ended": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
+
+          cancelTrackEnd(roomCode);
+
           const currentPlayback = await getPlayback(roomCode);
           if (!currentPlayback?.videoId) return;
 

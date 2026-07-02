@@ -9,6 +9,9 @@ export interface TimelineState {
   isPlaying: boolean;
   positionSec: number;
   anchorServerTime: number;
+  startedAt: number;
+  pausedDurationMs: number;
+  durationMs: number;
   shuffle: boolean;
   repeatMode: "off" | "all" | "one";
 }
@@ -42,6 +45,9 @@ export function defaultTimeline(): TimelineState {
     isPlaying: false,
     positionSec: 0,
     anchorServerTime: Date.now(),
+    startedAt: 0,
+    pausedDurationMs: 0,
+    durationMs: 0,
     shuffle: false,
     repeatMode: "off",
   };
