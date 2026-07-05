@@ -26,7 +26,7 @@ import {
   setPlayback,
   getTimeline,
 } from "./roomManager.js";
-import { createPauseSnapshot, createResumeSnapshot, effectiveElapsedMs } from "../lib/timeline.js";
+import { createPauseSnapshot, createResumeSnapshot, effectiveElapsedMs, currentPosition } from "../lib/timeline.js";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
 import { rooms, roomQueue } from "../db/schema.js";
@@ -624,6 +624,14 @@ export async function handleWS(ws: any, url: URL) {
             recentTracks: getRecentTracks(roomCode),
             queue: await getQueue(roomCode),
           });
+          // Reschedule track-end timer using stored timeline's actual position
+          const tl = await getTimeline(roomCode);
+          if (tl.isPlaying && tl.videoId && tl.durationMs > 0) {
+            const remainingMs = Math.max(1000, tl.durationMs - currentPosition(tl, Date.now()) * 1000);
+            if (remainingMs < 86400000) {
+              scheduleTrackEnd(roomCode, remainingMs);
+            }
+          }
           break;
         }
         case "queue:add": {
