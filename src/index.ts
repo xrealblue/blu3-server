@@ -212,14 +212,12 @@ app.post("/api/resolve", async (c) => {
   const isYouTubeId = /^[a-zA-Z0-9_-]{11}$/.test(body.videoId);
 
   let jioResult = null;
-  if (body.source !== "youtube") {
-    if (isNumericId) {
-      jioResult = await resolveJioSaavnById(body.videoId, body.name);
-    }
+  if (isNumericId) {
+    jioResult = await resolveJioSaavnById(body.videoId, body.name);
+  }
 
-    if (!jioResult && body.name?.trim()) {
-      jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists, body.duration);
-    }
+  if (!jioResult && body.name?.trim()) {
+    jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists, body.duration);
   }
 
   if (jioResult?.url) {
@@ -231,7 +229,7 @@ app.post("/api/resolve", async (c) => {
     const ytAudioUrl = await getYouTubeAudioUrl(body.videoId, AbortSignal.timeout(6000));
     if (ytAudioUrl) {
       audioCache.set(body.videoId, { cdnUrl: ytAudioUrl, fetchedAt: Date.now() });
-      return c.json({ source: "youtube", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
+      return c.json({ source: "jiosaavn", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
     }
   }
 
