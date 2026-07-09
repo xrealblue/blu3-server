@@ -32,6 +32,8 @@ import { db } from "../db/index.js";
 import { rooms, roomQueue } from "../db/schema.js";
 import { eq, asc, sql } from "drizzle-orm";
 import { pushTrackHistory } from "../db/trackHistory.js";
+import { getYouTubeAudioUrl } from "../lib/ytAudio.js";
+import { resolveJioSaavn } from "../lib/jiosaavnAudio.js";
 
 const MAX_SEEK_SEC = 3600;
 function clampTime(v: number | undefined | null, max = MAX_SEEK_SEC): number {
@@ -126,6 +128,25 @@ async function handleTrackEnd(roomCode: string) {
       duration_ms: nextDurMs,
       recentTracks: getRecentTracks(roomCode),
     });
+
+    // Pre-resolve next-next track
+    const allQ = await getQueue(roomCode);
+    const nextNextTrack = allQ.length > 2 ? allQ[2] ?? allQ[1] : null;
+    if (nextNextTrack?.videoId) {
+      const nt = nextNextTrack;
+      (async () => {
+        let url: string | null = null;
+        if (nt.source !== "youtube" && nt.name?.trim()) {
+          const jr = await resolveJioSaavn(nt.videoId, nt.name, nt.artists?.[0]?.name, nt.duration_ms).catch(() => null);
+          if (jr?.url) url = `/api/audio/${nt.videoId}`;
+        }
+        if (!url && /^[a-zA-Z0-9_-]{11}$/.test(nt.videoId)) {
+          const yt = await getYouTubeAudioUrl(nt.videoId).catch(() => null);
+          if (yt) url = `/api/audio/${nt.videoId}`;
+        }
+        if (url) broadcast(roomCode, { type: "track:preresolved", videoId: nt.videoId, audioUrl: url });
+      })();
+    }
   } else {
     await setPlayback(roomCode, { isPlaying: false, updatedAt: serverNow });
   }
@@ -494,6 +515,25 @@ export async function handleWS(ws: any, url: URL) {
             duration_ms: durMs,
             recentTracks: getRecentTracks(roomCode),
           });
+
+          // Pre-resolve next track (Layer 3: server pre-push)
+          getQueue(roomCode).then(q => {
+            const nextTrack = q.length > 1 ? q[1] ?? q[0] : q[0];
+            if (!nextTrack?.videoId) return;
+            const nt = nextTrack;
+            (async () => {
+              let url: string | null = null;
+              if (nt.source !== "youtube" && nt.name?.trim()) {
+                const jr = await resolveJioSaavn(nt.videoId, nt.name, nt.artists?.[0]?.name, nt.duration_ms).catch(() => null);
+                if (jr?.url) url = `/api/audio/${nt.videoId}`;
+              }
+              if (!url && /^[a-zA-Z0-9_-]{11}$/.test(nt.videoId)) {
+                const yt = await getYouTubeAudioUrl(nt.videoId).catch(() => null);
+                if (yt) url = `/api/audio/${nt.videoId}`;
+              }
+              if (url) broadcast(roomCode, { type: "track:preresolved", videoId: nt.videoId, audioUrl: url });
+            })();
+          }).catch(() => {});
           break;
         }
         case "playback:pause": {
