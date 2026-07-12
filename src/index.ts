@@ -210,31 +210,37 @@ app.post("/api/resolve", async (c) => {
 
   const isNumericId = /^\d+$/.test(body.videoId);
   const isYouTubeId = /^[a-zA-Z0-9_-]{11}$/.test(body.videoId);
+  const preferYoutube = body.source === "youtube";
 
-  let jioResult = null;
-  if (isNumericId) {
-    jioResult = await resolveJioSaavnById(body.videoId, body.name);
+  function cacheAndReturn(cdnUrl: string, resolvedSource: string) {
+    audioCache.set(body.videoId!, { cdnUrl, fetchedAt: Date.now() });
+    return c.json({ source: resolvedSource, videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
   }
 
-  if (!jioResult && body.name?.trim()) {
-    jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists, body.duration);
-  }
+  let jioResult: { url: string; source: string; videoId: string } | null = null;
 
-  if (jioResult?.url) {
-    audioCache.set(body.videoId, { cdnUrl: jioResult.url, fetchedAt: Date.now() });
-    return c.json({ source: "jiosaavn", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
+  if (!preferYoutube) {
+    if (isNumericId) {
+      jioResult = await resolveJioSaavnById(body.videoId, body.name);
+    }
+
+    if (!jioResult && body.name?.trim()) {
+      jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists, body.duration);
+    }
+
+    if (jioResult?.url) {
+      return cacheAndReturn(jioResult.url, "jiosaavn");
+    }
   }
 
   if (isYouTubeId) {
     const ytAudioUrl = await getYouTubeAudioUrl(body.videoId, AbortSignal.timeout(6000));
     if (ytAudioUrl) {
-      audioCache.set(body.videoId, { cdnUrl: ytAudioUrl, fetchedAt: Date.now() });
-      return c.json({ source: "jiosaavn", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
+      return cacheAndReturn(ytAudioUrl, "youtube");
     }
   }
 
-  // Fallback: videoId isn't a real YouTube ID and JioSaavn failed — search YouTube by name
-  if (!isYouTubeId && body.name?.trim()) {
+  if (body.name?.trim()) {
     const yt = await searchYouTubeWithMetadata(`${body.name} ${body.artists || ""}`.trim());
     if (yt?.videoId) {
       return c.json({ source: "youtube", videoId: yt.videoId, image: yt.thumbnail });

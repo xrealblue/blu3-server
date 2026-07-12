@@ -136,7 +136,9 @@ async function handleTrackEnd(roomCode: string) {
       const nt = nextNextTrack;
       (async () => {
         let url: string | null = null;
-        if (nt.source !== "youtube" && nt.name?.trim()) {
+        const preferYoutube = nt.source === "youtube";
+
+        if (!preferYoutube && nt.name?.trim()) {
           const jr = await resolveJioSaavn(nt.videoId, nt.name, nt.artists?.[0]?.name, nt.duration_ms).catch(() => null);
           if (jr?.url) url = `/api/audio/${nt.videoId}`;
         }
@@ -445,7 +447,7 @@ export async function handleWS(ws: any, url: URL) {
           }
 
           const isNewTrack = !currentTl?.videoId || currentTl.videoId !== msg.videoId;
-          const source = "youtube";
+          const source = msg.source ?? (await getQueue(roomCode).then(q => q.find(t => t.videoId === msg.videoId)?.source).catch(() => null)) ?? "youtube";
 
           // Cancel old advance timer — will reschedule below
           cancelTrackEnd(roomCode);
@@ -523,7 +525,9 @@ export async function handleWS(ws: any, url: URL) {
             const nt = nextTrack;
             (async () => {
               let url: string | null = null;
-              if (nt.source !== "youtube" && nt.name?.trim()) {
+              const preferYoutube = nt.source === "youtube";
+
+              if (!preferYoutube && nt.name?.trim()) {
                 const jr = await resolveJioSaavn(nt.videoId, nt.name, nt.artists?.[0]?.name, nt.duration_ms).catch(() => null);
                 if (jr?.url) url = `/api/audio/${nt.videoId}`;
               }
