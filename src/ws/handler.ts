@@ -327,7 +327,7 @@ export async function handleWS(ws: any, url: URL) {
 
   const loadedQueue: QueueTrack[] = queueFromDb.map((item) => ({
     id: item.id,
-    source: "youtube",
+    source: /^\d+$/.test(item.videoId) ? "jiosaavn" : "youtube",
     videoId: item.videoId,
     name: item.trackName,
     artists: [{ name: item.artistName }],
@@ -679,6 +679,18 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "queue:add": {
+          if (msg.track.name?.trim()) {
+            const jio = await resolveJioSaavn(
+              msg.track.videoId,
+              msg.track.name,
+              msg.track.artists?.[0]?.name,
+              msg.track.duration_ms,
+            ).catch(() => null);
+            if (jio?.url) {
+              msg.track.source = "jiosaavn";
+              msg.track.videoId = jio.videoId;
+            }
+          }
           await addToQueue(roomCode, msg.track);
           broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
           scheduleQueueSync(dbRoom.id, roomCode);
