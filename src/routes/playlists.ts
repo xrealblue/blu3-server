@@ -85,11 +85,19 @@ async function getSpotifyPlaylistTracksViaEmbed(playlistId: string): Promise<{ n
     const name = entity.name || "Imported Spotify Playlist";
     const trackList = entity.trackList || [];
     
-    const tracks = trackList.map((item: any) => ({
-      trackName: item.title || "Unknown Track",
-      artistName: item.subtitle || "Unknown Artist",
-      image: item.image || "",
-    }));
+    const tracks = trackList.map((item: any) => {
+      let artistName = item.subtitle || "Unknown Artist";
+      if (artistName.includes("•")) {
+        artistName = artistName.split("•")[0].trim();
+      }
+      const durationMs = item.durationMs || item.duration || 0;
+      return {
+        trackName: item.title || "Unknown Track",
+        artistName,
+        image: item.image || "",
+        durationMs: typeof durationMs === "number" ? durationMs : 0,
+      };
+    });
     
     return { name, tracks };
   } catch (err) {
@@ -132,7 +140,7 @@ async function getAppleMusicToken(): Promise<string | null> {
     });
     if (!mainRes.ok) return null;
     const html = await mainRes.text();
-    const jsUri = html.match(/\/assets\/index-legacy[~-][^/]+\.js/)?.[0];
+    const jsUri = html.match(/\/assets\/index(?:-legacy)?[~-][^/"]+\.js/)?.[0];
     if (!jsUri) return null;
 
     const jsRes = await fetch(`https://beta.music.apple.com${jsUri}`, {
@@ -183,14 +191,25 @@ async function getAppleMusicPlaylistTracks(url: string): Promise<{ name: string;
       playlistName = playlist.attributes?.name || playlistName;
       const batch = (playlist.relationships?.tracks?.data || [])
         .filter((item: any) => item.type === "songs")
-        .map((item: any) => ({
-          trackName: item.attributes?.name || "Unknown Track",
-          artistName: item.attributes?.artistName || "Unknown Artist",
-        }));
+        .map((item: any) => {
+          const attrs = item.attributes || {};
+          const artwork = attrs.artwork || {};
+          const imageUrl = artwork.url
+            ? artwork.url.replace("{w}", artwork.width || "500").replace("{h}", artwork.height || "500")
+            : "";
+          const durationMs = typeof attrs.durationInMillis === "number" ? attrs.durationInMillis : 0;
+          return {
+            trackName: attrs.name || "Unknown Track",
+            artistName: attrs.artistName || "Unknown Artist",
+            image: imageUrl,
+            durationMs,
+          };
+        });
 
       allTracks.push(...batch);
 
-      if (batch.length < 100 || allTracks.length >= 200) break;
+      const total = playlist.relationships?.tracks?.meta?.total || batch.length;
+      if (batch.length < 100 || allTracks.length >= total) break;
       offset += 100;
     }
 
@@ -227,9 +246,15 @@ function isMatch(title: string, artist: string, expectedTitle: string, expectedA
   return (titleMatch || partialMatch) && artistMatch;
 }
 
+function isDurationMatch(actualMs: number, expectedMs: number | undefined): boolean {
+  if (!expectedMs || !actualMs) return true;
+  return Math.abs(actualMs - expectedMs) < 3000;
+}
+
 async function resolveTrackToJioSaavn(
   trackName: string,
   artistName: string,
+  durationMs?: number,
 ): Promise<{ videoId: string; source: string; image: string; durationMs: number }> {
   const timeout = new Promise<{ videoId: ""; source: ""; image: ""; durationMs: 0 }>((resolve) =>
     setTimeout(() => resolve({ videoId: "", source: "", image: "", durationMs: 0 }), 15000),
@@ -242,7 +267,8 @@ async function resolveTrackToJioSaavn(
         searchYouTubeWithMetadata(query).catch(() => null),
       ]);
       const match = results.find((r) =>
-        isMatch(r.name, r.artists[0]?.name || "", trackName, artistName)
+        isMatch(r.name, r.artists[0]?.name || "", trackName, artistName) &&
+        isDurationMatch(r.duration_ms, durationMs)
       );
       if (match) {
         return {
@@ -593,7 +619,7 @@ playlistsRoute.post("/import", async (c) => {
     return c.json({ error: "Invalid playlist URL. Please provide a YouTube, Spotify, JioSaavn, or Apple Music link." }, 400);
   }
 
-  async function resolveChunked(
+    async function resolveChunked(
     items: { trackName: string; artistName: string; image?: string; durationMs?: number }[],
     chunkSize: number
   ) {
@@ -602,14 +628,14 @@ playlistsRoute.post("/import", async (c) => {
     for (const chunk of chunks) {
       const results = await Promise.all(
         chunk.map(async (item) => {
-          const r = await resolveTrackToJioSaavn(item.trackName, item.artistName);
+          const r = await resolveTrackToJioSaavn(item.trackName, item.artistName, item.durationMs);
           if (r.videoId) {
             return {
               videoId: r.videoId,
               source: r.source,
               trackName: item.trackName,
               artistName: item.artistName,
-              image: r.image || item.image || "",
+              image: item.image || r.image || "",
               durationMs: r.durationMs || item.durationMs || 0,
             };
           }
@@ -666,7 +692,7 @@ playlistsRoute.post("/import", async (c) => {
       }
       name = scraped.name;
       tracks = await resolveChunked(
-        scraped.tracks.map((t: any) => ({ trackName: t.trackName, artistName: t.artistName })),
+        scraped.tracks.map((t: any) => ({ trackName: t.trackName, artistName: t.artistName, image: t.image, durationMs: t.durationMs })),
         5
       );
     } else {
