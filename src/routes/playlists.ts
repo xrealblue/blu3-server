@@ -65,43 +65,57 @@ interface ScrapedSpotifyTrack {
   durationMs?: number;
 }
 
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)));
+}
+
 async function getSpotifyPlaylistTracksViaEmbed(playlistId: string): Promise<{ name: string; tracks: ScrapedSpotifyTrack[] } | null> {
   try {
-    const url = `https://open.spotify.com/embed/playlist/${playlistId}`;
+    const url = `https://open.spotify.com/playlist/${playlistId}`;
     const res = await fetch(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
       }
     });
     if (!res.ok) return null;
     const html = await res.text();
-    const nextDataMatch = html.match(/<script.*?id="__NEXT_DATA__".*?>(.*?)<\/script>/s);
-    if (!nextDataMatch) return null;
-    
-    const parsed = JSON.parse(nextDataMatch[1]);
-    const entity = parsed?.props?.pageProps?.state?.data?.entity;
-    if (!entity) return null;
-    
-    const name = entity.name || "Imported Spotify Playlist";
-    const trackList = entity.trackList || [];
-    
-    const tracks = trackList.map((item: any) => {
-      let artistName = item.subtitle || "Unknown Artist";
-      if (artistName.includes("•")) {
-        artistName = artistName.split("•")[0].trim();
+
+    const titleMatch = html.match(/<title>(.+?)<\/title>/i);
+    const name = titleMatch ? decodeHtmlEntities(titleMatch[1]).replace(/\s*\|\s*Spotify\s*(Playlist)?$/i, "").trim() : "Imported Spotify Playlist";
+
+    const trackNameRegex = /aria-label="([^"]+)"\s+data-testid="track-row"/g;
+    const trackNames: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = trackNameRegex.exec(html)) !== null) {
+      const raw = m[1].replace(/\s*Explicit\s*/gi, "").trim();
+      if (raw) trackNames.push(decodeHtmlEntities(raw));
+    }
+    if (trackNames.length === 0) return null;
+
+    const parts = html.split('data-testid="track-row"');
+    const artistRegex = /data-testid="internal-artist-link">[^<]*<a[^>]*>([^<]+)<\/a>/g;
+    const tracks: ScrapedSpotifyTrack[] = [];
+
+    for (let i = 0; i < trackNames.length; i++) {
+      const part = parts[i + 1] || "";
+      const artists: string[] = [];
+      let am: RegExpExecArray | null;
+      while ((am = artistRegex.exec(part)) !== null) {
+        artists.push(decodeHtmlEntities(am[1].trim()));
       }
-      const durationMs = item.durationMs || item.duration || 0;
-      return {
-        trackName: item.title || "Unknown Track",
-        artistName,
-        image: item.image || "",
-        durationMs: typeof durationMs === "number" ? durationMs : 0,
-      };
-    });
-    
+      const artistName = artists.length > 0 ? artists.join(", ") : "Unknown Artist";
+      tracks.push({ trackName: trackNames[i], artistName });
+    }
+
     return { name, tracks };
   } catch (err) {
-    console.error("Spotify Embed Scrape failed:", err);
+    console.error("Spotify main page scrape failed:", err);
     return null;
   }
 }
