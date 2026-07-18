@@ -107,6 +107,9 @@ export class RoomManager {
       this.broadcaster.removeSocket(existing.socketId, existing.roomCode);
       this.clientMap.delete(existing.socketId);
     }
+    if (!existing && this.hostMap.get(client.roomCode) === client.userId && this.hostFallbackMap.has(client.roomCode)) {
+      isReconnect = true;
+    }
     this.userSocketMap.set(client.userId, { socketId: client.id, roomCode: client.roomCode, ws: client.ws });
     this.clientMap.set(client.id, { client, roomCode: client.roomCode });
     this.broadcaster.addSocket(client.id, client.roomCode, (data: string) => {
