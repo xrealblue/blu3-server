@@ -12,7 +12,7 @@ import { eq } from "drizzle-orm";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import audioFallbackRoute from "./routes/audioFallback.js";
-import { handleWS } from "./ws/handler.js";
+import { handleWS, flushAllPendingSyncs } from "./ws/handler.js";
 import { resolveJioSaavn, resolveJioSaavnById, searchJioSaavnResults } from "./lib/jiosaavnAudio.js";
 import { searchYouTube, searchYouTubeResults, getYoutubeMusicAlbumArt, getYouTubeVideoInfo, searchYouTubeWithMetadata, getYouTubeAudioUrl } from "./lib/ytAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
@@ -483,3 +483,9 @@ serve(
     console.log(`Ready:  http://localhost:${info.port}/readyz`);
   },
 );
+
+process.on("SIGTERM", async () => {
+  console.log("SIGTERM received, flushing pending syncs...");
+  await flushAllPendingSyncs();
+  process.exit(0);
+});

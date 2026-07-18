@@ -61,6 +61,7 @@ export class RoomManager {
   private clientMap = new Map<string, { client: WSClient; roomCode: string }>();
   private recentTracks = new Map<string, RecentTrack[]>();
   private hostMap = new Map<string, string>();
+  private roomIdMap = new Map<string, string>();
 
   constructor(store?: RoomStore, broadcaster?: Broadcaster) {
     this.store = store ?? new MemoryRoomStore();
@@ -72,6 +73,20 @@ export class RoomManager {
 
   async initRoom(code: string, hostId: string): Promise<void> {
     this.hostMap.set(code, hostId);
+  }
+
+  setRoomId(code: string, roomId: string): void {
+    this.roomIdMap.set(code, roomId);
+  }
+
+  getRoomIdByCode(code: string): string | undefined {
+    return this.roomIdMap.get(code);
+  }
+
+  getRoomCodeById(roomId: string): string | undefined {
+    for (const [code, id] of this.roomIdMap) {
+      if (id === roomId) return code;
+    }
   }
 
   async addClient(client: WSClient): Promise<void> {
@@ -217,6 +232,16 @@ export async function addClient(client: WSClient) {
 
 export function removeClient(socketId: string, roomCode: string) {
   legacyManager.removeClient(socketId, roomCode);
+}
+
+export { legacyManager };
+
+export function setRoomId(code: string, roomId: string) {
+  legacyManager.setRoomId(code, roomId);
+}
+
+export function getRoomCodeById(roomId: string): string | undefined {
+  return legacyManager.getRoomCodeById(roomId);
 }
 
 export function broadcast(code: string, msg: object, excludeSocketId?: string) {

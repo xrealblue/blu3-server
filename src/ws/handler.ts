@@ -25,6 +25,9 @@ import {
   getPlayback,
   setPlayback,
   getTimeline,
+  legacyManager,
+  setRoomId,
+  getRoomCodeById,
 } from "./roomManager.js";
 import { createPauseSnapshot, createResumeSnapshot, effectiveElapsedMs, currentPosition } from "../lib/timeline.js";
 import { nanoid } from "nanoid";
@@ -259,10 +262,29 @@ function scheduleQueueSync(roomId: string, roomCode: string) {
     syncDebounceTimers.delete(roomId);
     const q = await getQueue(roomCode);
     syncQueueToDb(roomId, q).catch(console.error);
-  }, 10_000));
+  }, 3_000));
 }
 
 const sessionCache = new Map<string, { user: any; expiresAt: number }>();
+
+export async function flushAllPendingSyncs() {
+  const entries = Array.from(syncDebounceTimers.entries());
+  for (const [roomId, timer] of entries) {
+    clearTimeout(timer);
+    syncDebounceTimers.delete(roomId);
+  }
+  await Promise.allSettled(
+    entries.map(async ([roomId]) => {
+      try {
+        const code = getRoomCodeById(roomId);
+        if (code) {
+          const q = await getQueue(code);
+          await syncQueueToDb(roomId, q);
+        }
+      } catch {}
+    })
+  );
+}
 
 export async function handleWS(ws: any, url: URL) {
   const token = url.searchParams.get("token");
@@ -328,6 +350,7 @@ export async function handleWS(ws: any, url: URL) {
     return null;
   }
 
+  setRoomId(roomCode, dbRoom.id);
   const room = getOrCreateRoom(roomCode, dbRoom.hostId);
   await addClient(client);
   console.log(`ws. ${(user.email ?? user.name ?? user.id).split("@")[0]} connected`);
