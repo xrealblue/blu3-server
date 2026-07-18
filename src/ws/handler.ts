@@ -1,5 +1,6 @@
 import { getSessionFromRequest } from "../lib/auth.js";
 import { decodeJwt } from "jose";
+import { maybeCompress } from "../lib/compress.js";
 import {
   getOrCreateRoom,
   addClient,
@@ -308,7 +309,7 @@ export async function handleWS(ws: any, url: URL) {
   const roomCode = url.searchParams.get("room")?.toUpperCase();
 
   if (!token || !roomCode) {
-    ws.send(JSON.stringify({ type: "error", message: "Missing token or room" }));
+    ws.send(maybeCompress(JSON.stringify({ type: "error", message: "Missing token or room" })));
     ws.close();
     return null;
   }
@@ -337,7 +338,7 @@ export async function handleWS(ws: any, url: URL) {
         };
       } catch (jwtErr) {
         console.error("WS auth error:", jwtErr);
-        ws.send(JSON.stringify({ type: "error", message: "Invalid token" }));
+        ws.send(maybeCompress(JSON.stringify({ type: "error", message: "Invalid token" })));
         ws.close();
         return null;
       }
@@ -362,7 +363,7 @@ export async function handleWS(ws: any, url: URL) {
     .limit(1);
 
   if (!dbRoom) {
-    ws.send(JSON.stringify({ type: "error", message: "Room not found" }));
+    ws.send(maybeCompress(JSON.stringify({ type: "error", message: "Room not found" })));
     ws.close();
     return null;
   }
@@ -396,10 +397,10 @@ export async function handleWS(ws: any, url: URL) {
   }
 
   const serverNow = Date.now();
-  ws.send(JSON.stringify({
+  ws.send(maybeCompress(JSON.stringify({
     type: "clock_sync",
     serverTime: serverNow,
-  } satisfies Extract<WSMessage, { type: "clock_sync" }>));
+  } satisfies Extract<WSMessage, { type: "clock_sync" }>)));
 
   const [playback, playMode, members, recent, q] = await Promise.all([
     getPlayback(roomCode),
@@ -410,7 +411,7 @@ export async function handleWS(ws: any, url: URL) {
   ]);
 
   const queueHash = q.length > 0 ? simpleHash(q.map(t => t.videoId + (t.id || "")).join("|")) : "";
-  ws.send(JSON.stringify({
+  ws.send(maybeCompress(JSON.stringify({
     type: "room:joined",
     roomCode,
     isHost: room.hostId === user.id,
@@ -455,11 +456,11 @@ export async function handleWS(ws: any, url: URL) {
 
       switch (msg.type) {
         case "clock_sync_request": {
-          ws.send(JSON.stringify({
+          ws.send(maybeCompress(JSON.stringify({
             type: "clock_sync",
             serverTime: Date.now(),
             clientTime: (msg as any).clientTime,
-          }));
+          })));
           break;
         }
         case "chat:send": {

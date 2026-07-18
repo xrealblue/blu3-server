@@ -3,6 +3,7 @@ import { MemoryRoomStore } from "../lib/roomStore.js";
 import type { Broadcaster, BroadcastPayload } from "../lib/broadcaster.js";
 import { LocalBroadcaster } from "../lib/broadcaster.js";
 import { currentPosition } from "../lib/timeline.js";
+import { maybeCompress } from "../lib/compress.js";
 
 export type { QueueTrack };
 export type RepeatMode = "off" | "all" | "one";
@@ -110,7 +111,7 @@ export class RoomManager {
     this.clientMap.set(client.id, { client, roomCode: client.roomCode });
     this.broadcaster.addSocket(client.id, client.roomCode, (data: string) => {
       if (client.ws.readyState === 1) {
-        try { client.ws.send(data); } catch {}
+        try { client.ws.send(maybeCompress(data)); } catch {}
       }
     });
     if (!isReconnect) {
