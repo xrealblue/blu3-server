@@ -62,6 +62,7 @@ export class RoomManager {
   private recentTracks = new Map<string, RecentTrack[]>();
   private hostMap = new Map<string, string>();
   private roomIdMap = new Map<string, string>();
+  private userSocketMap = new Map<string, { socketId: string; roomCode: string; ws: any }>();
 
   constructor(store?: RoomStore, broadcaster?: Broadcaster) {
     this.store = store ?? new MemoryRoomStore();
@@ -90,6 +91,18 @@ export class RoomManager {
   }
 
   async addClient(client: WSClient): Promise<void> {
+    const existing = this.userSocketMap.get(client.userId);
+    if (existing && existing.roomCode === client.roomCode) {
+      try { existing.ws.close(4001, "Replaced by new connection"); } catch {}
+      this.broadcaster.removeSocket(existing.socketId, existing.roomCode);
+      this.clientMap.delete(existing.socketId);
+    }
+    if (existing && existing.roomCode !== client.roomCode) {
+      try { existing.ws.close(4001, "Connected to another room"); } catch {}
+      this.broadcaster.removeSocket(existing.socketId, existing.roomCode);
+      this.clientMap.delete(existing.socketId);
+    }
+    this.userSocketMap.set(client.userId, { socketId: client.id, roomCode: client.roomCode, ws: client.ws });
     this.clientMap.set(client.id, { client, roomCode: client.roomCode });
     this.broadcaster.addSocket(client.id, client.roomCode, (data: string) => {
       if (client.ws.readyState === 1) {
@@ -109,6 +122,7 @@ export class RoomManager {
     if (entry) {
       this.broadcaster.removeSocket(socketId, entry.roomCode);
       this.clientMap.delete(socketId);
+      this.userSocketMap.delete(entry.client.userId);
       this.store.removeMember(entry.roomCode, entry.client.userId).catch(console.error);
     }
   }
