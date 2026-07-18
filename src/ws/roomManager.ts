@@ -90,9 +90,11 @@ export class RoomManager {
     }
   }
 
-  async addClient(client: WSClient): Promise<void> {
+  async addClient(client: WSClient): Promise<boolean> {
     const existing = this.userSocketMap.get(client.userId);
+    let isReconnect = false;
     if (existing && existing.roomCode === client.roomCode) {
+      isReconnect = true;
       try { existing.ws.close(4001, "Replaced by new connection"); } catch {}
       this.broadcaster.removeSocket(existing.socketId, existing.roomCode);
       this.clientMap.delete(existing.socketId);
@@ -109,12 +111,15 @@ export class RoomManager {
         try { client.ws.send(data); } catch {}
       }
     });
-    await this.store.addMember(client.roomCode, {
-      userId: client.userId,
-      name: client.name,
-      avatar: client.avatar,
-      joinedAt: Date.now(),
-    });
+    if (!isReconnect) {
+      await this.store.addMember(client.roomCode, {
+        userId: client.userId,
+        name: client.name,
+        avatar: client.avatar,
+        joinedAt: Date.now(),
+      });
+    }
+    return isReconnect;
   }
 
   removeClient(socketId: string, _roomCode: string): void {

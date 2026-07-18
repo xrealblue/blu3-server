@@ -367,9 +367,9 @@ export async function handleWS(ws: any, url: URL) {
 
   setRoomId(roomCode, dbRoom.id);
   const room = getOrCreateRoom(roomCode, dbRoom.hostId);
-  await addClient(client);
+  const isReconnect = await addClient(client);
   wsConnectionsActive.inc();
-  roomEventsTotal.inc({ event: "join" });
+  if (!isReconnect) roomEventsTotal.inc({ event: "join" });
   console.log(`ws. ${(user.email ?? user.name ?? user.id).split("@")[0]} connected`);
 
   const queueFromDb = await db
@@ -429,11 +429,13 @@ export async function handleWS(ws: any, url: URL) {
     });
   }
 
-  broadcast(roomCode, {
-    type: "room:member_joined",
-    members: await getRoomMembers(roomCode),
-    user: { userId: user.id, name: user.name, avatar: user.image },
-  }, socketId);
+  if (!isReconnect) {
+    broadcast(roomCode, {
+      type: "room:member_joined",
+      members: await getRoomMembers(roomCode),
+      user: { userId: user.id, name: user.name, avatar: user.image },
+    }, socketId);
+  }
 
   return {
     async onMessage(event: any) {
