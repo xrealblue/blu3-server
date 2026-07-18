@@ -89,6 +89,30 @@ app.use("*", async (c, next) => {
   c.res.headers.set("Vary", "Origin");
 });
 
+const RATE_LIMIT_CONFIGS: Record<string, { max: number; windowMs: number }> = {
+  "/api/search": { max: 30, windowMs: 60_000 },
+  "/api/resolve": { max: 60, windowMs: 60_000 },
+  "/api/resolve-link": { max: 20, windowMs: 60_000 },
+  "/api/playlists": { max: 40, windowMs: 60_000 },
+  "/api/rooms": { max: 20, windowMs: 60_000 },
+  "/api/auth": { max: 10, windowMs: 60_000 },
+  "/api/audio/": { max: 200, windowMs: 60_000 },
+};
+
+app.use("*", async (c, next) => {
+  if (c.req.method === "OPTIONS") return next();
+  const path = c.req.path;
+  const matched = Object.entries(RATE_LIMIT_CONFIGS).find(([prefix]) => path.startsWith(prefix));
+  if (!matched) return next();
+  const [, { max, windowMs }] = matched;
+  const identifier = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? c.req.header("x-real-ip") ?? "unknown";
+  const rl = await checkRateLimit(`http:${path}:${identifier}`, max, windowMs);
+  if (!rl.success) {
+    return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
+  }
+  return next();
+});
+
 app.get("/", (c) => {
   const error = c.req.query("error");
   if (error) {
@@ -179,12 +203,6 @@ app.get("/api/search", async (c) => {
   const q = c.req.query("q");
   if (!q?.trim()) return c.json({ tracks: [] });
 
-  const ip = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? "unknown";
-  const rl = await checkRateLimit(`search:${ip}`, 30);
-  if (!rl.success) {
-    return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
-  }
-
   // const tracks = await searchJioSaavnResults(q);
   const ytResults = await searchYouTubeResults(q);
   const tracks = ytResults.map((r) => ({
@@ -212,12 +230,6 @@ app.post("/api/resolve", async (c) => {
   }
 
   if (!body.videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
-
-  const ip = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? "unknown";
-  const rl = await checkRateLimit(`resolve:${ip}`, 60);
-  if (!rl.success) {
-    return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
-  }
 
   const isNumericId = /^\d+$/.test(body.videoId);
   const isYouTubeId = /^[a-zA-Z0-9_-]{11}$/.test(body.videoId);
@@ -280,10 +292,6 @@ app.post("/api/resolve-link", async (c) => {
 
   const { url } = await c.req.json();
   if (!url?.trim()) return c.json({ error: "Missing url" }, 400);
-
-  const ip = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? "unknown";
-  const rl = await checkRateLimit(`resolve-link:${ip}`, 20);
-  if (!rl.success) return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
 
   const preResolveAudio = (vid: string) => {
     getYouTubeAudioUrl(vid, AbortSignal.timeout(8000))
