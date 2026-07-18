@@ -16,6 +16,7 @@ import { handleWS, flushAllPendingSyncs } from "./ws/handler.js";
 import { resolveJioSaavn, resolveJioSaavnById, searchJioSaavnResults } from "./lib/jiosaavnAudio.js";
 import { searchYouTube, searchYouTubeResults, getYoutubeMusicAlbumArt, getYouTubeVideoInfo, searchYouTubeWithMetadata, getYouTubeAudioUrl } from "./lib/ytAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
+import { httpRequestDuration, httpRequestTotal, metricsHandler, getMetricsContentType } from "./lib/metrics.js";
 
 
 const audioCache = new Map<string, { cdnUrl: string; fetchedAt: number }>();
@@ -57,6 +58,11 @@ app.use("*", async (c, next) => {
   const ms = Date.now() - start;
   const status = c.res.status;
   console.log(`${method} ${masked} ${status} ${ms}ms`);
+  try {
+    const path = new URL(url).pathname;
+    httpRequestDuration.observe({ method, path, status }, ms);
+    httpRequestTotal.inc({ method, path, status });
+  } catch {}
 });
 
 app.use("*", async (c, next) => {
@@ -108,6 +114,11 @@ app.get("/readyz", async (c) => {
   }
   if (issues.length > 0) return c.json({ status: "degraded", issues }, 503);
   return c.json({ status: "ok" });
+});
+app.get("/metrics", async (c) => {
+  const body = await metricsHandler();
+  c.header("Content-Type", getMetricsContentType());
+  return c.body(body);
 });
 
 // ─── Desktop OAuth Redirect ─────────────────────────────────────────────────
