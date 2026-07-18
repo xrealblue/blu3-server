@@ -45,6 +45,18 @@ function clampTime(v: number | undefined | null, max = MAX_SEEK_SEC): number {
   return Number.isFinite(n) ? Math.max(0, Math.min(n, max)) : 0;
 }
 
+function simpleHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash |= 0;
+  }
+  return (hash >>> 0).toString(36);
+}
+
+const QUEUE_FULL_THRESHOLD = 50;
+
 // ── Server-side auto-advance timers ──────────────────────
 const advanceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -191,7 +203,8 @@ type IncomingMessage =
   | { type: "queue:add"; track: QueueTrack }
   | { type: "queue:remove"; trackId: string }
   | { type: "queue:cycle_current"; trackId: string }
-  | { type: "queue:clear" };
+  | { type: "queue:clear" }
+  | { type: "queue:fetch_full"; hash?: string };
 
 function canControlPlayback(roomCode: string, hostId: string, userId: string, userRole?: string) {
   if (userRole === "admin") return true;
@@ -394,6 +407,7 @@ export async function handleWS(ws: any, url: URL) {
     getQueue(roomCode),
   ]);
 
+  const queueHash = q.length > 0 ? simpleHash(q.map(t => t.videoId + (t.id || "")).join("|")) : "";
   ws.send(JSON.stringify({
     type: "room:joined",
     roomCode,
@@ -403,7 +417,9 @@ export async function handleWS(ws: any, url: URL) {
     playback,
     playbackMode: playMode,
     recentTracks: recent,
-    queue: q,
+    queue: q.length > QUEUE_FULL_THRESHOLD ? q.slice(0, 5) : q,
+    queueHash,
+    queueFull: q.length > QUEUE_FULL_THRESHOLD,
   }));
 
   if (room.hostId === user.id) {
@@ -724,6 +740,11 @@ export async function handleWS(ws: any, url: URL) {
               scheduleTrackEnd(roomCode, remainingMs);
             }
           }
+          break;
+        }
+        case "queue:fetch_full": {
+          const fullQueue = await getQueue(roomCode);
+          sendTo(socketId, roomCode, { type: "room:queue_update", queue: fullQueue });
           break;
         }
         case "queue:add": {
