@@ -13,6 +13,7 @@ import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import audioFallbackRoute from "./routes/audioFallback.js";
 import { handleWS, flushAllPendingSyncs } from "./ws/handler.js";
+import { startCronJobs } from "./cron.js";
 import { resolveJioSaavn, resolveJioSaavnById, searchJioSaavnResults } from "./lib/jiosaavnAudio.js";
 import { searchYouTube, searchYouTubeResults, getYoutubeMusicAlbumArt, getYouTubeVideoInfo, searchYouTubeWithMetadata, getYouTubeAudioUrl } from "./lib/ytAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
@@ -487,6 +488,8 @@ app.get("/api/audio/:videoId", async (c) => {
 });
 
 const port = Number(process.env.PORT ?? 8000);
+
+startCronJobs();
 
 const wss = new WebSocketServer({ noServer: true });
 
