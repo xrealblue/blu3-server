@@ -8,6 +8,8 @@ import {
   sendTo,
   getRoomMembers,
   isHostInRoom,
+  isFallbackActive,
+  scheduleFallbackElection,
   type WSClient,
   type ChatMessage,
   getRecentTracks,
@@ -412,7 +414,7 @@ export async function handleWS(ws: any, url: URL) {
     type: "room:joined",
     roomCode,
     isHost: room.hostId === user.id,
-    isHostActive: isHostInRoom(roomCode),
+    isHostActive: isHostInRoom(roomCode) || isFallbackActive(roomCode),
     members,
     playback,
     playbackMode: playMode,
@@ -819,6 +821,7 @@ export async function handleWS(ws: any, url: URL) {
           userId: user.id,
         });
         if (wasHost) {
+          scheduleFallbackElection(roomCode, (code, msg) => broadcast(code, msg as any));
           broadcast(roomCode, {
             type: "host:active_changed",
             isHostActive: false,

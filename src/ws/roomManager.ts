@@ -61,6 +61,8 @@ export class RoomManager {
   private clientMap = new Map<string, { client: WSClient; roomCode: string }>();
   private recentTracks = new Map<string, RecentTrack[]>();
   private hostMap = new Map<string, string>();
+  private hostFallbackMap = new Map<string, { userId: string; electedAt: number }>();
+  private electionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private roomIdMap = new Map<string, string>();
   private userSocketMap = new Map<string, { socketId: string; roomCode: string; ws: any }>();
 
@@ -118,6 +120,11 @@ export class RoomManager {
         avatar: client.avatar,
         joinedAt: Date.now(),
       });
+    } else {
+      const origHost = this.hostMap.get(client.roomCode);
+      if (origHost === client.userId) {
+        this.revokeFallback(client.roomCode, (code, msg) => this.broadcast(code, msg as BroadcastPayload));
+      }
     }
     return isReconnect;
   }
@@ -176,7 +183,56 @@ export class RoomManager {
   canControlPlayback(code: string, userId: string): boolean {
     const hostId = this.hostMap.get(code);
     if (!hostId) return true;
-    return !this.isHostInRoom(code) || hostId === userId;
+    if (this.isHostInRoom(code)) return hostId === userId;
+    const fallback = this.hostFallbackMap.get(code);
+    if (fallback) return fallback.userId === userId;
+    return true;
+  }
+
+  getFallbackHost(code: string): string | undefined {
+    return this.hostFallbackMap.get(code)?.userId;
+  }
+
+  getActiveHostId(code: string): string {
+    return this.hostFallbackMap.get(code)?.userId ?? this.hostMap.get(code) ?? "";
+  }
+
+  isFallbackActive(code: string): boolean {
+    return this.hostFallbackMap.has(code);
+  }
+
+  scheduleFallbackElection(code: string, broadcastFn: (code: string, msg: object) => void): void {
+    if (this.electionTimers.has(code)) clearTimeout(this.electionTimers.get(code)!);
+    this.electionTimers.set(code, setTimeout(async () => {
+      this.electionTimers.delete(code);
+      if (this.isHostInRoom(code)) return;
+      const members = await this.store.getMembers(code);
+      const hostUserId = this.hostMap.get(code);
+      const candidates = members.filter(m => m.userId !== hostUserId);
+      if (candidates.length === 0) return;
+      const now = Date.now();
+      const sorted = candidates.toSorted((a, b) => (a.joinedAt ?? 0) - (b.joinedAt ?? 0));
+      const fallback = sorted[0];
+      this.hostFallbackMap.set(code, { userId: fallback.userId, electedAt: now });
+      broadcastFn(code, {
+        type: "host:fallback_elected",
+        userId: fallback.userId,
+        name: fallback.name,
+      });
+    }, 30000));
+  }
+
+  cancelFallbackElection(code: string): void {
+    const timer = this.electionTimers.get(code);
+    if (timer) { clearTimeout(timer); this.electionTimers.delete(code); }
+  }
+
+  revokeFallback(code: string, broadcastFn: (code: string, msg: object) => void): void {
+    this.cancelFallbackElection(code);
+    if (this.hostFallbackMap.has(code)) {
+      this.hostFallbackMap.delete(code);
+      broadcastFn(code, { type: "host:fallback_revoked" });
+    }
   }
 
   async getMembers(code: string) {
@@ -269,6 +325,26 @@ export function broadcast(code: string, msg: object, excludeSocketId?: string) {
 
 export function sendTo(socketId: string, roomCode: string, msg: object) {
   legacyManager.sendTo(socketId, roomCode, msg as BroadcastPayload);
+}
+
+export function getFallbackHost(code: string): string | undefined {
+  return legacyManager.getFallbackHost(code);
+}
+
+export function getActiveHostId(code: string): string {
+  return legacyManager.getActiveHostId(code);
+}
+
+export function isFallbackActive(code: string): boolean {
+  return legacyManager.isFallbackActive(code);
+}
+
+export function scheduleFallbackElection(code: string, broadcastFn: (code: string, msg: object) => void): void {
+  legacyManager.scheduleFallbackElection(code, broadcastFn);
+}
+
+export function revokeFallback(code: string, broadcastFn: (code: string, msg: object) => void): void {
+  legacyManager.revokeFallback(code, broadcastFn);
 }
 
 export async function getRoomMembers(code: string) {
