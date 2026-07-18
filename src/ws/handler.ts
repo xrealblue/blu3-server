@@ -438,6 +438,7 @@ export async function handleWS(ws: any, url: URL) {
           ws.send(JSON.stringify({
             type: "clock_sync",
             serverTime: Date.now(),
+            clientTime: (msg as any).clientTime,
           }));
           break;
         }
