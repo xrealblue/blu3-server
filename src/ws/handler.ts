@@ -91,7 +91,7 @@ async function handleTrackEnd(roomCode: string) {
 
   const q = await getQueue(roomCode);
   const endedTrack = q.find((t) => t.videoId === tl.videoId || t.id === tl.videoId);
-  if (endedTrack) await moveQueueTrackToEnd(roomCode, endedTrack.id);
+  if (endedTrack) await withQueueLock(roomCode, async () => { await moveQueueTrackToEnd(roomCode, endedTrack.id); });
 
   const nextTrack = q.length > 1 ? q[1] ?? q[0] : q[0];
   if (nextTrack && nextTrack.videoId) {
@@ -197,6 +197,19 @@ function canControlPlayback(roomCode: string, hostId: string, userId: string, us
 
 const syncDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const syncLocks = new Map<string, Promise<void>>();
+
+const queueLocks = new Map<string, Promise<void>>();
+
+async function withQueueLock(roomCode: string, fn: () => Promise<void>) {
+  while (queueLocks.has(roomCode)) {
+    try { await queueLocks.get(roomCode); } catch { }
+  }
+  const promise = (async () => {
+    try { await fn(); } finally { queueLocks.delete(roomCode); }
+  })();
+  queueLocks.set(roomCode, promise);
+  await promise;
+}
 
 async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
   while (syncLocks.has(roomId)) {
@@ -443,7 +456,7 @@ export async function handleWS(ws: any, url: URL) {
             const oldTrack = (await getQueue(roomCode)).find(
               (t) => t.videoId === currentTl.videoId || t.id === currentTl.videoId,
             );
-            if (oldTrack) await moveQueueTrackToEnd(roomCode, oldTrack.id);
+            if (oldTrack) await withQueueLock(roomCode, async () => { await moveQueueTrackToEnd(roomCode, oldTrack.id); });
           }
 
           const isNewTrack = !currentTl?.videoId || currentTl.videoId !== msg.videoId;
@@ -624,7 +637,7 @@ export async function handleWS(ws: any, url: URL) {
           const endedTrack = q.find(
             (t) => t.videoId === currentPlayback.videoId || t.id === currentPlayback.videoId,
           );
-          if (endedTrack) await moveQueueTrackToEnd(roomCode, endedTrack.id);
+          if (endedTrack) await withQueueLock(roomCode, async () => { await moveQueueTrackToEnd(roomCode, endedTrack.id); });
 
           await setPlayback(roomCode, {
             isPlaying: false,
@@ -679,42 +692,50 @@ export async function handleWS(ws: any, url: URL) {
           break;
         }
         case "queue:add": {
-          if (msg.track.name?.trim()) {
-            const jio = await resolveJioSaavn(
-              msg.track.videoId,
-              msg.track.name,
-              msg.track.artists?.[0]?.name,
-              msg.track.duration_ms,
-            ).catch(() => null);
-            if (jio?.url) {
-              msg.track.source = "jiosaavn";
-              msg.track.videoId = jio.videoId;
+          await withQueueLock(roomCode, async () => {
+            if (msg.track.name?.trim()) {
+              const jio = await resolveJioSaavn(
+                msg.track.videoId,
+                msg.track.name,
+                msg.track.artists?.[0]?.name,
+                msg.track.duration_ms,
+              ).catch(() => null);
+              if (jio?.url) {
+                msg.track.source = "jiosaavn";
+                msg.track.videoId = jio.videoId;
+              }
             }
-          }
-          await addToQueue(roomCode, msg.track);
-          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
-          scheduleQueueSync(dbRoom.id, roomCode);
+            await addToQueue(roomCode, msg.track);
+            broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
+            scheduleQueueSync(dbRoom.id, roomCode);
+          });
           break;
         }
         case "queue:remove": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
-          await removeFromQueue(roomCode, msg.trackId);
-          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
-          scheduleQueueSync(dbRoom.id, roomCode);
+          await withQueueLock(roomCode, async () => {
+            await removeFromQueue(roomCode, msg.trackId);
+            broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
+            scheduleQueueSync(dbRoom.id, roomCode);
+          });
           break;
         }
         case "queue:cycle_current": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
-          await moveQueueTrackToEnd(roomCode, msg.trackId);
-          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
-          scheduleQueueSync(dbRoom.id, roomCode);
+          await withQueueLock(roomCode, async () => {
+            await moveQueueTrackToEnd(roomCode, msg.trackId);
+            broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
+            scheduleQueueSync(dbRoom.id, roomCode);
+          });
           break;
         }
         case "queue:clear": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
-          await clearQueue(roomCode);
-          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
-          scheduleQueueSync(dbRoom.id, roomCode);
+          await withQueueLock(roomCode, async () => {
+            await clearQueue(roomCode);
+            broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
+            scheduleQueueSync(dbRoom.id, roomCode);
+          });
           break;
         }
       }
