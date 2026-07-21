@@ -12,12 +12,10 @@ import { eq } from "drizzle-orm";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 import audioFallbackRoute from "./routes/audioFallback.js";
-import { handleWS, flushAllPendingSyncs } from "./ws/handler.js";
-import { startCronJobs } from "./cron.js";
+import { handleWS } from "./ws/handler.js";
 import { resolveJioSaavn, resolveJioSaavnById, searchJioSaavnResults } from "./lib/jiosaavnAudio.js";
 import { searchYouTube, searchYouTubeResults, getYoutubeMusicAlbumArt, getYouTubeVideoInfo, searchYouTubeWithMetadata, getYouTubeAudioUrl } from "./lib/ytAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
-import { httpRequestDuration, httpRequestTotal, metricsHandler, getMetricsContentType } from "./lib/metrics.js";
 
 
 const audioCache = new Map<string, { cdnUrl: string; fetchedAt: number }>();
@@ -59,11 +57,6 @@ app.use("*", async (c, next) => {
   const ms = Date.now() - start;
   const status = c.res.status;
   console.log(`${method} ${masked} ${status} ${ms}ms`);
-  try {
-    const path = new URL(url).pathname;
-    httpRequestDuration.observe({ method, path, status }, ms);
-    httpRequestTotal.inc({ method, path, status });
-  } catch {}
 });
 
 app.use("*", async (c, next) => {
@@ -88,30 +81,6 @@ app.use("*", async (c, next) => {
     c.res.headers.set("Access-Control-Allow-Credentials", "true");
   }
   c.res.headers.set("Vary", "Origin");
-});
-
-const RATE_LIMIT_CONFIGS: Record<string, { max: number; windowMs: number }> = {
-  "/api/search": { max: 30, windowMs: 60_000 },
-  "/api/resolve": { max: 60, windowMs: 60_000 },
-  "/api/resolve-link": { max: 20, windowMs: 60_000 },
-  "/api/playlists": { max: 40, windowMs: 60_000 },
-  "/api/rooms": { max: 20, windowMs: 60_000 },
-  "/api/auth": { max: 10, windowMs: 60_000 },
-  "/api/audio/": { max: 200, windowMs: 60_000 },
-};
-
-app.use("*", async (c, next) => {
-  if (c.req.method === "OPTIONS") return next();
-  const path = c.req.path;
-  const matched = Object.entries(RATE_LIMIT_CONFIGS).find(([prefix]) => path.startsWith(prefix));
-  if (!matched) return next();
-  const [, { max, windowMs }] = matched;
-  const identifier = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? c.req.header("x-real-ip") ?? "unknown";
-  const rl = await checkRateLimit(`http:${path}:${identifier}`, max, windowMs);
-  if (!rl.success) {
-    return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
-  }
-  return next();
 });
 
 app.get("/", (c) => {
@@ -139,11 +108,6 @@ app.get("/readyz", async (c) => {
   }
   if (issues.length > 0) return c.json({ status: "degraded", issues }, 503);
   return c.json({ status: "ok" });
-});
-app.get("/metrics", async (c) => {
-  const body = await metricsHandler();
-  c.header("Content-Type", getMetricsContentType());
-  return c.body(body);
 });
 
 // ─── Desktop OAuth Redirect ─────────────────────────────────────────────────
@@ -204,6 +168,12 @@ app.get("/api/search", async (c) => {
   const q = c.req.query("q");
   if (!q?.trim()) return c.json({ tracks: [] });
 
+  const ip = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? "unknown";
+  const rl = await checkRateLimit(`search:${ip}`, 30);
+  if (!rl.success) {
+    return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
+  }
+
   // const tracks = await searchJioSaavnResults(q);
   const ytResults = await searchYouTubeResults(q);
   const tracks = ytResults.map((r) => ({
@@ -231,6 +201,12 @@ app.post("/api/resolve", async (c) => {
   }
 
   if (!body.videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
+
+  const ip = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? "unknown";
+  const rl = await checkRateLimit(`resolve:${ip}`, 60);
+  if (!rl.success) {
+    return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
+  }
 
   const isNumericId = /^\d+$/.test(body.videoId);
   const isYouTubeId = /^[a-zA-Z0-9_-]{11}$/.test(body.videoId);
@@ -293,6 +269,10 @@ app.post("/api/resolve-link", async (c) => {
 
   const { url } = await c.req.json();
   if (!url?.trim()) return c.json({ error: "Missing url" }, 400);
+
+  const ip = c.req.header("x-forwarded-for") ?? c.req.header("cf-connecting-ip") ?? "unknown";
+  const rl = await checkRateLimit(`resolve-link:${ip}`, 20);
+  if (!rl.success) return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
 
   const preResolveAudio = (vid: string) => {
     getYouTubeAudioUrl(vid, AbortSignal.timeout(8000))
@@ -489,8 +469,6 @@ app.get("/api/audio/:videoId", async (c) => {
 
 const port = Number(process.env.PORT ?? 8000);
 
-startCronJobs();
-
 const wss = new WebSocketServer({ noServer: true });
 
 serve(
@@ -505,9 +483,3 @@ serve(
     console.log(`Ready:  http://localhost:${info.port}/readyz`);
   },
 );
-
-process.on("SIGTERM", async () => {
-  console.log("SIGTERM received, flushing pending syncs...");
-  await flushAllPendingSyncs();
-  process.exit(0);
-});

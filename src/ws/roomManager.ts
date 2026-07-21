@@ -3,7 +3,6 @@ import { MemoryRoomStore } from "../lib/roomStore.js";
 import type { Broadcaster, BroadcastPayload } from "../lib/broadcaster.js";
 import { LocalBroadcaster } from "../lib/broadcaster.js";
 import { currentPosition } from "../lib/timeline.js";
-import { maybeCompress } from "../lib/compress.js";
 
 export type { QueueTrack };
 export type RepeatMode = "off" | "all" | "one";
@@ -62,10 +61,6 @@ export class RoomManager {
   private clientMap = new Map<string, { client: WSClient; roomCode: string }>();
   private recentTracks = new Map<string, RecentTrack[]>();
   private hostMap = new Map<string, string>();
-  private hostFallbackMap = new Map<string, { userId: string; electedAt: number }>();
-  private electionTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private roomIdMap = new Map<string, string>();
-  private userSocketMap = new Map<string, { socketId: string; roomCode: string; ws: any }>();
 
   constructor(store?: RoomStore, broadcaster?: Broadcaster) {
     this.store = store ?? new MemoryRoomStore();
@@ -79,58 +74,19 @@ export class RoomManager {
     this.hostMap.set(code, hostId);
   }
 
-  setRoomId(code: string, roomId: string): void {
-    this.roomIdMap.set(code, roomId);
-  }
-
-  getRoomIdByCode(code: string): string | undefined {
-    return this.roomIdMap.get(code);
-  }
-
-  getRoomCodeById(roomId: string): string | undefined {
-    for (const [code, id] of this.roomIdMap) {
-      if (id === roomId) return code;
-    }
-  }
-
-  async addClient(client: WSClient): Promise<boolean> {
-    const existing = this.userSocketMap.get(client.userId);
-    let isReconnect = false;
-    if (existing && existing.roomCode === client.roomCode) {
-      isReconnect = true;
-      try { existing.ws.close(4001, "Replaced by new connection"); } catch {}
-      this.broadcaster.removeSocket(existing.socketId, existing.roomCode);
-      this.clientMap.delete(existing.socketId);
-    }
-    if (existing && existing.roomCode !== client.roomCode) {
-      try { existing.ws.close(4001, "Connected to another room"); } catch {}
-      this.broadcaster.removeSocket(existing.socketId, existing.roomCode);
-      this.clientMap.delete(existing.socketId);
-    }
-    if (!existing && this.hostMap.get(client.roomCode) === client.userId && this.hostFallbackMap.has(client.roomCode)) {
-      isReconnect = true;
-    }
-    this.userSocketMap.set(client.userId, { socketId: client.id, roomCode: client.roomCode, ws: client.ws });
+  async addClient(client: WSClient): Promise<void> {
     this.clientMap.set(client.id, { client, roomCode: client.roomCode });
     this.broadcaster.addSocket(client.id, client.roomCode, (data: string) => {
       if (client.ws.readyState === 1) {
-        try { client.ws.send(maybeCompress(data)); } catch {}
+        try { client.ws.send(data); } catch {}
       }
     });
-    if (!isReconnect) {
-      await this.store.addMember(client.roomCode, {
-        userId: client.userId,
-        name: client.name,
-        avatar: client.avatar,
-        joinedAt: Date.now(),
-      });
-    } else {
-      const origHost = this.hostMap.get(client.roomCode);
-      if (origHost === client.userId) {
-        this.revokeFallback(client.roomCode, (code, msg) => this.broadcast(code, msg as BroadcastPayload));
-      }
-    }
-    return isReconnect;
+    await this.store.addMember(client.roomCode, {
+      userId: client.userId,
+      name: client.name,
+      avatar: client.avatar,
+      joinedAt: Date.now(),
+    });
   }
 
   removeClient(socketId: string, _roomCode: string): void {
@@ -138,7 +94,6 @@ export class RoomManager {
     if (entry) {
       this.broadcaster.removeSocket(socketId, entry.roomCode);
       this.clientMap.delete(socketId);
-      this.userSocketMap.delete(entry.client.userId);
       this.store.removeMember(entry.roomCode, entry.client.userId).catch(console.error);
     }
   }
@@ -187,56 +142,7 @@ export class RoomManager {
   canControlPlayback(code: string, userId: string): boolean {
     const hostId = this.hostMap.get(code);
     if (!hostId) return true;
-    if (this.isHostInRoom(code)) return hostId === userId;
-    const fallback = this.hostFallbackMap.get(code);
-    if (fallback) return fallback.userId === userId;
-    return true;
-  }
-
-  getFallbackHost(code: string): string | undefined {
-    return this.hostFallbackMap.get(code)?.userId;
-  }
-
-  getActiveHostId(code: string): string {
-    return this.hostFallbackMap.get(code)?.userId ?? this.hostMap.get(code) ?? "";
-  }
-
-  isFallbackActive(code: string): boolean {
-    return this.hostFallbackMap.has(code);
-  }
-
-  scheduleFallbackElection(code: string, broadcastFn: (code: string, msg: object) => void): void {
-    if (this.electionTimers.has(code)) clearTimeout(this.electionTimers.get(code)!);
-    this.electionTimers.set(code, setTimeout(async () => {
-      this.electionTimers.delete(code);
-      if (this.isHostInRoom(code)) return;
-      const members = await this.store.getMembers(code);
-      const hostUserId = this.hostMap.get(code);
-      const candidates = members.filter(m => m.userId !== hostUserId);
-      if (candidates.length === 0) return;
-      const now = Date.now();
-      const sorted = candidates.toSorted((a, b) => (a.joinedAt ?? 0) - (b.joinedAt ?? 0));
-      const fallback = sorted[0];
-      this.hostFallbackMap.set(code, { userId: fallback.userId, electedAt: now });
-      broadcastFn(code, {
-        type: "host:fallback_elected",
-        userId: fallback.userId,
-        name: fallback.name,
-      });
-    }, 30000));
-  }
-
-  cancelFallbackElection(code: string): void {
-    const timer = this.electionTimers.get(code);
-    if (timer) { clearTimeout(timer); this.electionTimers.delete(code); }
-  }
-
-  revokeFallback(code: string, broadcastFn: (code: string, msg: object) => void): void {
-    this.cancelFallbackElection(code);
-    if (this.hostFallbackMap.has(code)) {
-      this.hostFallbackMap.delete(code);
-      broadcastFn(code, { type: "host:fallback_revoked" });
-    }
+    return !this.isHostInRoom(code) || hostId === userId;
   }
 
   async getMembers(code: string) {
@@ -313,42 +219,12 @@ export function removeClient(socketId: string, roomCode: string) {
   legacyManager.removeClient(socketId, roomCode);
 }
 
-export { legacyManager };
-
-export function setRoomId(code: string, roomId: string) {
-  legacyManager.setRoomId(code, roomId);
-}
-
-export function getRoomCodeById(roomId: string): string | undefined {
-  return legacyManager.getRoomCodeById(roomId);
-}
-
 export function broadcast(code: string, msg: object, excludeSocketId?: string) {
   legacyManager.broadcast(code, msg as BroadcastPayload, excludeSocketId);
 }
 
 export function sendTo(socketId: string, roomCode: string, msg: object) {
   legacyManager.sendTo(socketId, roomCode, msg as BroadcastPayload);
-}
-
-export function getFallbackHost(code: string): string | undefined {
-  return legacyManager.getFallbackHost(code);
-}
-
-export function getActiveHostId(code: string): string {
-  return legacyManager.getActiveHostId(code);
-}
-
-export function isFallbackActive(code: string): boolean {
-  return legacyManager.isFallbackActive(code);
-}
-
-export function scheduleFallbackElection(code: string, broadcastFn: (code: string, msg: object) => void): void {
-  legacyManager.scheduleFallbackElection(code, broadcastFn);
-}
-
-export function revokeFallback(code: string, broadcastFn: (code: string, msg: object) => void): void {
-  legacyManager.revokeFallback(code, broadcastFn);
 }
 
 export async function getRoomMembers(code: string) {

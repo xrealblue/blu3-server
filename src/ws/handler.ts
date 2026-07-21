@@ -1,6 +1,5 @@
 import { getSessionFromRequest } from "../lib/auth.js";
 import { decodeJwt } from "jose";
-import { maybeCompress } from "../lib/compress.js";
 import {
   getOrCreateRoom,
   addClient,
@@ -9,8 +8,6 @@ import {
   sendTo,
   getRoomMembers,
   isHostInRoom,
-  isFallbackActive,
-  scheduleFallbackElection,
   type WSClient,
   type ChatMessage,
   getRecentTracks,
@@ -28,9 +25,6 @@ import {
   getPlayback,
   setPlayback,
   getTimeline,
-  legacyManager,
-  setRoomId,
-  getRoomCodeById,
 } from "./roomManager.js";
 import { createPauseSnapshot, createResumeSnapshot, effectiveElapsedMs, currentPosition } from "../lib/timeline.js";
 import { nanoid } from "nanoid";
@@ -40,25 +34,12 @@ import { eq, asc, sql } from "drizzle-orm";
 import { pushTrackHistory } from "../db/trackHistory.js";
 import { getYouTubeAudioUrl } from "../lib/ytAudio.js";
 import { resolveJioSaavn } from "../lib/jiosaavnAudio.js";
-import { wsConnectionsActive, wsMessagesTotal, playbackEventsTotal, queueOperationsTotal, roomEventsTotal, errorsTotal } from "../lib/metrics.js";
 
 const MAX_SEEK_SEC = 3600;
 function clampTime(v: number | undefined | null, max = MAX_SEEK_SEC): number {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? Math.max(0, Math.min(n, max)) : 0;
 }
-
-function simpleHash(str: string): string {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash |= 0;
-  }
-  return (hash >>> 0).toString(36);
-}
-
-const QUEUE_FULL_THRESHOLD = 50;
 
 // ── Server-side auto-advance timers ──────────────────────
 const advanceTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -110,7 +91,7 @@ async function handleTrackEnd(roomCode: string) {
 
   const q = await getQueue(roomCode);
   const endedTrack = q.find((t) => t.videoId === tl.videoId || t.id === tl.videoId);
-  if (endedTrack) await withQueueLock(roomCode, async () => { await moveQueueTrackToEnd(roomCode, endedTrack.id); });
+  if (endedTrack) await moveQueueTrackToEnd(roomCode, endedTrack.id);
 
   const nextTrack = q.length > 1 ? q[1] ?? q[0] : q[0];
   if (nextTrack && nextTrack.videoId) {
@@ -206,8 +187,7 @@ type IncomingMessage =
   | { type: "queue:add"; track: QueueTrack }
   | { type: "queue:remove"; trackId: string }
   | { type: "queue:cycle_current"; trackId: string }
-  | { type: "queue:clear" }
-  | { type: "queue:fetch_full"; hash?: string };
+  | { type: "queue:clear" };
 
 function canControlPlayback(roomCode: string, hostId: string, userId: string, userRole?: string) {
   if (userRole === "admin") return true;
@@ -217,19 +197,6 @@ function canControlPlayback(roomCode: string, hostId: string, userId: string, us
 
 const syncDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const syncLocks = new Map<string, Promise<void>>();
-
-const queueLocks = new Map<string, Promise<void>>();
-
-async function withQueueLock(roomCode: string, fn: () => Promise<void>) {
-  while (queueLocks.has(roomCode)) {
-    try { await queueLocks.get(roomCode); } catch { }
-  }
-  const promise = (async () => {
-    try { await fn(); } finally { queueLocks.delete(roomCode); }
-  })();
-  queueLocks.set(roomCode, promise);
-  await promise;
-}
 
 async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
   while (syncLocks.has(roomId)) {
@@ -264,7 +231,6 @@ async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
       }
     } catch (err) {
       console.error("Failed to sync queue to database:", err);
-      errorsTotal.inc({ source: "queue_sync" });
     } finally {
       syncLocks.delete(roomId);
     }
@@ -280,36 +246,17 @@ function scheduleQueueSync(roomId: string, roomCode: string) {
     syncDebounceTimers.delete(roomId);
     const q = await getQueue(roomCode);
     syncQueueToDb(roomId, q).catch(console.error);
-  }, 3_000));
+  }, 10_000));
 }
 
 const sessionCache = new Map<string, { user: any; expiresAt: number }>();
-
-export async function flushAllPendingSyncs() {
-  const entries = Array.from(syncDebounceTimers.entries());
-  for (const [roomId, timer] of entries) {
-    clearTimeout(timer);
-    syncDebounceTimers.delete(roomId);
-  }
-  await Promise.allSettled(
-    entries.map(async ([roomId]) => {
-      try {
-        const code = getRoomCodeById(roomId);
-        if (code) {
-          const q = await getQueue(code);
-          await syncQueueToDb(roomId, q);
-        }
-      } catch {}
-    })
-  );
-}
 
 export async function handleWS(ws: any, url: URL) {
   const token = url.searchParams.get("token");
   const roomCode = url.searchParams.get("room")?.toUpperCase();
 
   if (!token || !roomCode) {
-    ws.send(maybeCompress(JSON.stringify({ type: "error", message: "Missing token or room" })));
+    ws.send(JSON.stringify({ type: "error", message: "Missing token or room" }));
     ws.close();
     return null;
   }
@@ -338,7 +285,7 @@ export async function handleWS(ws: any, url: URL) {
         };
       } catch (jwtErr) {
         console.error("WS auth error:", jwtErr);
-        ws.send(maybeCompress(JSON.stringify({ type: "error", message: "Invalid token" })));
+        ws.send(JSON.stringify({ type: "error", message: "Invalid token" }));
         ws.close();
         return null;
       }
@@ -363,16 +310,13 @@ export async function handleWS(ws: any, url: URL) {
     .limit(1);
 
   if (!dbRoom) {
-    ws.send(maybeCompress(JSON.stringify({ type: "error", message: "Room not found" })));
+    ws.send(JSON.stringify({ type: "error", message: "Room not found" }));
     ws.close();
     return null;
   }
 
-  setRoomId(roomCode, dbRoom.id);
   const room = getOrCreateRoom(roomCode, dbRoom.hostId);
-  const isReconnect = await addClient(client);
-  wsConnectionsActive.inc();
-  if (!isReconnect) roomEventsTotal.inc({ event: "join" });
+  await addClient(client);
   console.log(`ws. ${(user.email ?? user.name ?? user.id).split("@")[0]} connected`);
 
   const queueFromDb = await db
@@ -397,10 +341,10 @@ export async function handleWS(ws: any, url: URL) {
   }
 
   const serverNow = Date.now();
-  ws.send(maybeCompress(JSON.stringify({
+  ws.send(JSON.stringify({
     type: "clock_sync",
     serverTime: serverNow,
-  } satisfies Extract<WSMessage, { type: "clock_sync" }>)));
+  } satisfies Extract<WSMessage, { type: "clock_sync" }>));
 
   const [playback, playMode, members, recent, q] = await Promise.all([
     getPlayback(roomCode),
@@ -410,19 +354,16 @@ export async function handleWS(ws: any, url: URL) {
     getQueue(roomCode),
   ]);
 
-  const queueHash = q.length > 0 ? simpleHash(q.map(t => t.videoId + (t.id || "")).join("|")) : "";
-  ws.send(maybeCompress(JSON.stringify({
+  ws.send(JSON.stringify({
     type: "room:joined",
     roomCode,
     isHost: room.hostId === user.id,
-    isHostActive: isHostInRoom(roomCode) || isFallbackActive(roomCode),
+    isHostActive: isHostInRoom(roomCode),
     members,
     playback,
     playbackMode: playMode,
     recentTracks: recent,
-    queue: q.length > QUEUE_FULL_THRESHOLD ? q.slice(0, 5) : q,
-    queueHash,
-    queueFull: q.length > QUEUE_FULL_THRESHOLD,
+    queue: q,
   }));
 
   if (room.hostId === user.id) {
@@ -432,13 +373,11 @@ export async function handleWS(ws: any, url: URL) {
     });
   }
 
-  if (!isReconnect) {
-    broadcast(roomCode, {
-      type: "room:member_joined",
-      members: await getRoomMembers(roomCode),
-      user: { userId: user.id, name: user.name, avatar: user.image },
-    }, socketId);
-  }
+  broadcast(roomCode, {
+    type: "room:member_joined",
+    members: await getRoomMembers(roomCode),
+    user: { userId: user.id, name: user.name, avatar: user.image },
+  }, socketId);
 
   return {
     async onMessage(event: any) {
@@ -447,20 +386,17 @@ export async function handleWS(ws: any, url: URL) {
         const raw = typeof event.data === "string" ? event.data : event;
         msg = JSON.parse(raw);
       } catch {
-        errorsTotal.inc({ source: "ws" });
         return;
       }
 
       const serverNow = Date.now();
-      wsMessagesTotal.inc({ type: msg.type });
 
       switch (msg.type) {
         case "clock_sync_request": {
-          ws.send(maybeCompress(JSON.stringify({
+          ws.send(JSON.stringify({
             type: "clock_sync",
             serverTime: Date.now(),
-            clientTime: (msg as any).clientTime,
-          })));
+          }));
           break;
         }
         case "chat:send": {
@@ -478,7 +414,6 @@ export async function handleWS(ws: any, url: URL) {
         case "playback:play": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
           if (!msg.videoId) return;
-          playbackEventsTotal.inc({ action: "play" });
 
           const currentTl = await getPlayback(roomCode);
           const isResume = currentTl?.videoId === msg.videoId && !currentTl?.isPlaying;
@@ -508,7 +443,7 @@ export async function handleWS(ws: any, url: URL) {
             const oldTrack = (await getQueue(roomCode)).find(
               (t) => t.videoId === currentTl.videoId || t.id === currentTl.videoId,
             );
-            if (oldTrack) await withQueueLock(roomCode, async () => { await moveQueueTrackToEnd(roomCode, oldTrack.id); });
+            if (oldTrack) await moveQueueTrackToEnd(roomCode, oldTrack.id);
           }
 
           const isNewTrack = !currentTl?.videoId || currentTl.videoId !== msg.videoId;
@@ -607,7 +542,6 @@ export async function handleWS(ws: any, url: URL) {
         }
         case "playback:pause": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
-          playbackEventsTotal.inc({ action: "pause" });
 
           cancelTrackEnd(roomCode);
 
@@ -644,7 +578,6 @@ export async function handleWS(ws: any, url: URL) {
         }
         case "playback:seek": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
-          playbackEventsTotal.inc({ action: "seek" });
 
           cancelTrackEnd(roomCode);
 
@@ -665,7 +598,6 @@ export async function handleWS(ws: any, url: URL) {
         }
         case "playback:ended": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
-          playbackEventsTotal.inc({ action: "ended" });
 
           cancelTrackEnd(roomCode);
 
@@ -692,7 +624,7 @@ export async function handleWS(ws: any, url: URL) {
           const endedTrack = q.find(
             (t) => t.videoId === currentPlayback.videoId || t.id === currentPlayback.videoId,
           );
-          if (endedTrack) await withQueueLock(roomCode, async () => { await moveQueueTrackToEnd(roomCode, endedTrack.id); });
+          if (endedTrack) await moveQueueTrackToEnd(roomCode, endedTrack.id);
 
           await setPlayback(roomCode, {
             isPlaying: false,
@@ -711,7 +643,6 @@ export async function handleWS(ws: any, url: URL) {
         }
         case "playback:mode": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
-          playbackEventsTotal.inc({ action: "mode" });
           const mode = await getPlaybackMode(roomCode);
           const next = {
             ...mode,
@@ -747,60 +678,43 @@ export async function handleWS(ws: any, url: URL) {
           }
           break;
         }
-        case "queue:fetch_full": {
-          const fullQueue = await getQueue(roomCode);
-          sendTo(socketId, roomCode, { type: "room:queue_update", queue: fullQueue });
-          break;
-        }
         case "queue:add": {
-          queueOperationsTotal.inc({ action: "add" });
-          await withQueueLock(roomCode, async () => {
-            if (msg.track.name?.trim()) {
-              const jio = await resolveJioSaavn(
-                msg.track.videoId,
-                msg.track.name,
-                msg.track.artists?.[0]?.name,
-                msg.track.duration_ms,
-              ).catch(() => null);
-              if (jio?.url) {
-                msg.track.source = "jiosaavn";
-                msg.track.videoId = jio.videoId;
-              }
+          if (msg.track.name?.trim()) {
+            const jio = await resolveJioSaavn(
+              msg.track.videoId,
+              msg.track.name,
+              msg.track.artists?.[0]?.name,
+              msg.track.duration_ms,
+            ).catch(() => null);
+            if (jio?.url) {
+              msg.track.source = "jiosaavn";
+              msg.track.videoId = jio.videoId;
             }
-            await addToQueue(roomCode, msg.track);
-            broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
-            scheduleQueueSync(dbRoom.id, roomCode);
-          });
+          }
+          await addToQueue(roomCode, msg.track);
+          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
+          scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
         case "queue:remove": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
-          queueOperationsTotal.inc({ action: "remove" });
-          await withQueueLock(roomCode, async () => {
-            await removeFromQueue(roomCode, msg.trackId);
-            broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
-            scheduleQueueSync(dbRoom.id, roomCode);
-          });
+          await removeFromQueue(roomCode, msg.trackId);
+          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
+          scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
         case "queue:cycle_current": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
-          queueOperationsTotal.inc({ action: "cycle" });
-          await withQueueLock(roomCode, async () => {
-            await moveQueueTrackToEnd(roomCode, msg.trackId);
-            broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
-            scheduleQueueSync(dbRoom.id, roomCode);
-          });
+          await moveQueueTrackToEnd(roomCode, msg.trackId);
+          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
+          scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
         case "queue:clear": {
           if (!canControlPlayback(roomCode, room.hostId, user.id, user.role)) return;
-          queueOperationsTotal.inc({ action: "clear" });
-          await withQueueLock(roomCode, async () => {
-            await clearQueue(roomCode);
-            broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
-            scheduleQueueSync(dbRoom.id, roomCode);
-          });
+          await clearQueue(roomCode);
+          broadcast(roomCode, { type: "room:queue_update", queue: await getQueue(roomCode) });
+          scheduleQueueSync(dbRoom.id, roomCode);
           break;
         }
       }
@@ -822,17 +736,14 @@ export async function handleWS(ws: any, url: URL) {
           userId: user.id,
         });
         if (wasHost) {
-          scheduleFallbackElection(roomCode, (code, msg) => broadcast(code, msg as any));
           broadcast(roomCode, {
             type: "host:active_changed",
             isHostActive: false,
           });
         }
-        wsConnectionsActive.dec();
         console.log(`ws. ${(user.email ?? user.name ?? user.id).split("@")[0]} disconnected`);
       } catch (err) {
         console.error("[WS] onClose error:", err);
-        errorsTotal.inc({ source: "ws" });
       }
     },
   };
