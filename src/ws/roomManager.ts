@@ -37,6 +37,7 @@ export interface PlaybackState {
   startedAt: number;
   pausedDurationMs: number;
   durationMs: number;
+  anchorServerTime?: number;
 }
 
 export interface RecentTrack {
@@ -120,6 +121,7 @@ export class RoomManager {
       startedAt: tl.startedAt,
       pausedDurationMs: tl.pausedDurationMs,
       durationMs: tl.durationMs,
+      anchorServerTime: tl.anchorServerTime,
     };
   }
 

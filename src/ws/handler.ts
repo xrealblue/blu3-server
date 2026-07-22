@@ -187,7 +187,8 @@ type IncomingMessage =
   | { type: "queue:add"; track: QueueTrack }
   | { type: "queue:remove"; trackId: string }
   | { type: "queue:cycle_current"; trackId: string }
-  | { type: "queue:clear" };
+  | { type: "queue:clear" }
+  | { type: "progress"; currentTime: number };
 
 function canControlPlayback(roomCode: string, hostId: string, userId: string, userRole?: string) {
   if (userRole === "admin") return true;
@@ -346,13 +347,19 @@ export async function handleWS(ws: any, url: URL) {
     serverTime: serverNow,
   } satisfies Extract<WSMessage, { type: "clock_sync" }>));
 
+  const tl = await getTimeline(roomCode);
   const [playback, playMode, members, recent, q] = await Promise.all([
-    getPlayback(roomCode),
+    Promise.resolve(getPlayback(roomCode)),
     getPlaybackMode(roomCode),
     getRoomMembers(roomCode),
     getRecentTracks(roomCode),
     getQueue(roomCode),
   ]);
+
+  const resolvedPlayback = await playback;
+  if (resolvedPlayback && tl.videoId) {
+    resolvedPlayback.anchorServerTime = tl.anchorServerTime;
+  }
 
   ws.send(JSON.stringify({
     type: "room:joined",
@@ -360,7 +367,7 @@ export async function handleWS(ws: any, url: URL) {
     isHost: room.hostId === user.id,
     isHostActive: isHostInRoom(roomCode),
     members,
-    playback,
+    playback: resolvedPlayback,
     playbackMode: playMode,
     recentTracks: recent,
     queue: q,
@@ -594,6 +601,16 @@ export async function handleWS(ws: any, url: URL) {
             serverTime: serverNow,
             anchorServerTime: serverNow,
           } satisfies Extract<WSMessage, { type: "seek" }>);
+          break;
+        }
+        case "progress": {
+          const tl = await getTimeline(roomCode);
+          if (tl && tl.isPlaying && tl.videoId) {
+            await setPlayback(roomCode, {
+              currentTime: clampTime(msg.currentTime),
+              updatedAt: serverNow,
+            });
+          }
           break;
         }
         case "playback:ended": {
