@@ -52,6 +52,17 @@ roomsRoute.post("/", requireAuth, async (c) => {
   return c.json({ room });
 });
 
+// GET /api/rooms/sitemap — public sitemap data (room codes for indexing)
+roomsRoute.get("/sitemap", async (c) => {
+  const activeRooms = await db
+    .select({ code: rooms.code, name: rooms.name })
+    .from(rooms)
+    .where(eq(rooms.isActive, true))
+    .orderBy(desc(rooms.createdAt))
+    .limit(500);
+  return c.json({ rooms: activeRooms });
+});
+
 // GET /api/rooms/:code/og — public endpoint for OG image data
 roomsRoute.get("/:code/og", async (c) => {
   const code = c.req.param("code").toUpperCase();
