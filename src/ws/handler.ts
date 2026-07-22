@@ -212,6 +212,7 @@ async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
           id: isUuid(track.id) ? track.id : crypto.randomUUID(),
           roomId,
           videoId: track.videoId,
+          source: track.source ?? "youtube",
           trackName: track.name,
           artistName: track.artists?.[0]?.name ?? "Unknown",
           image: track.image ?? "",
@@ -222,6 +223,7 @@ async function syncQueueToDb(roomId: string, queue: QueueTrack[]) {
           target: roomQueue.id,
           set: {
             videoId: sql`excluded.video_id`,
+            source: sql`excluded.source`,
             trackName: sql`excluded.track_name`,
             artistName: sql`excluded.artist_name`,
             image: sql`excluded.image`,
@@ -328,7 +330,7 @@ export async function handleWS(ws: any, url: URL) {
 
   const loadedQueue: QueueTrack[] = queueFromDb.map((item) => ({
     id: item.id,
-    source: /^\d+$/.test(item.videoId) ? "jiosaavn" : "youtube",
+    source: item.source ?? "youtube",
     videoId: item.videoId,
     name: item.trackName,
     artists: [{ name: item.artistName }],

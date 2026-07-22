@@ -115,6 +115,7 @@ export const roomQueue = pgTable(
       .notNull()
       .references(() => rooms.id, { onDelete: "cascade" }),
     videoId: text("video_id").notNull(),
+    source: text("source").notNull().default("youtube"),
     trackName: text("track_name").notNull(),
     artistName: text("artist_name").notNull(),
     image: text("image").notNull().default(""),
