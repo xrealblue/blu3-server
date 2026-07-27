@@ -91,9 +91,24 @@ async function handleTrackEnd(roomCode: string) {
 
   const q = await getQueue(roomCode);
   const endedTrack = q.find((t) => t.videoId === tl.videoId || t.id === tl.videoId);
-  if (endedTrack) await moveQueueTrackToEnd(roomCode, endedTrack.id);
+  if (endedTrack) {
+    await moveQueueTrackToEnd(roomCode, endedTrack.id);
+  } else if (tl.videoId) {
+    const newQTrack: QueueTrack = {
+      id: `room-${tl.videoId}`,
+      source: tl.source ?? "youtube",
+      videoId: tl.videoId,
+      name: tl.trackName ?? "",
+      artists: tl.artistName ? [{ name: tl.artistName }] : [],
+      image: tl.image ?? "",
+      duration_ms: tl.durationMs,
+    };
+    await addToQueue(roomCode, newQTrack);
+    await moveQueueTrackToEnd(roomCode, newQTrack.id);
+  }
 
-  const nextTrack = q.length > 1 ? q[1] ?? q[0] : q[0];
+  const freshQ = await getQueue(roomCode);
+  const nextTrack = freshQ.length > 0 ? freshQ[0] : null;
   if (nextTrack && nextTrack.videoId) {
     await setPlayback(roomCode, {
       videoId: nextTrack.videoId,
@@ -498,6 +513,18 @@ export async function handleWS(ws: any, url: URL) {
           }
 
           await setPlayback(roomCode, setState);
+
+          if (isNewTrack) {
+            await insertQueueTop(roomCode, {
+              id: msg.id || `room-${msg.videoId}`,
+              source,
+              videoId: msg.videoId,
+              name: msg.trackName ?? "",
+              artists: msg.artistName ? [{ name: msg.artistName }] : [],
+              image: msg.image ?? "",
+              duration_ms: msg.duration_ms,
+            });
+          }
 
           // Server-side auto-advance: schedule a check when this track should end.
           // The timeout fires at the expected end time; the callback verifies the

@@ -101,7 +101,11 @@ export class MemoryRoomStore implements RoomStore {
     const q = this.queues.get(code) ?? [];
     const existingIdx = q.findIndex((t) => t.videoId === track.videoId);
     if (existingIdx !== -1) q.splice(existingIdx, 1);
-    q.splice(1, 0, track);
+    if (q.length === 0) {
+      q.push(track);
+    } else {
+      q.splice(1, 0, track);
+    }
     this.queues.set(code, q);
   }
 
@@ -189,7 +193,11 @@ export class RedisRoomStore implements RoomStore {
     const q = await this.getQueue(code);
     const existingIdx = q.findIndex((t) => t.videoId === track.videoId);
     if (existingIdx !== -1) q.splice(existingIdx, 1);
-    q.splice(1, 0, track);
+    if (q.length === 0) {
+      q.push(track);
+    } else {
+      q.splice(1, 0, track);
+    }
     await this.setQueue(code, q);
   }
 
