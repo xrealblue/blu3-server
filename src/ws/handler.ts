@@ -125,7 +125,9 @@ async function handleTrackEnd(roomCode: string) {
     });
 
     const nextDurMs = nextTrack.duration_ms ?? 0;
-    if (nextDurMs > 0) {
+    if (nextDurMs <= 0) {
+      scheduleTrackEnd(roomCode, 4 * 60 * 1000);
+    } else {
       scheduleTrackEnd(roomCode, nextDurMs);
     }
 
@@ -501,7 +503,7 @@ export async function handleWS(ws: any, url: URL) {
                 image: currentTl!.image ?? "",
                 isPlaying: false,
                 positionSec: currentTl!.currentTime,
-                anchorServerTime: currentTl!.updatedAt,
+                anchorServerTime: currentTl!.anchorServerTime ?? currentTl!.updatedAt,
                 startedAt: currentTl!.startedAt,
                 pausedDurationMs: currentTl!.pausedDurationMs,
                 durationMs: currentTl!.durationMs,
@@ -529,9 +531,11 @@ export async function handleWS(ws: any, url: URL) {
           // Server-side auto-advance: schedule a check when this track should end.
           // The timeout fires at the expected end time; the callback verifies the
           // same track is still playing before advancing.
-          const durMs = msg.duration_ms ?? 0;
+          let durMs = msg.duration_ms ?? 0;
+          if (durMs <= 0) durMs = currentTl?.durationMs ?? 0;
+          if (durMs <= 0) durMs = 4 * 60 * 1000;
           const remainingMs = Math.max(1000, durMs - seekTo * 1000);
-          if (durMs > 0 && remainingMs < 86400000) {
+          if (remainingMs < 86400000) {
             scheduleTrackEnd(roomCode, remainingMs);
           }
 
