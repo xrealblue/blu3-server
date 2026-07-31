@@ -32,6 +32,12 @@ export const auth = betterAuth({
       requireLocalEmailVerified: false,
     },
   },
+  cookies: {
+    sameSite: "none",
+    secure: true,
+    httpOnly: true,
+    prefix: "none",
+  },
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID!,
@@ -40,6 +46,14 @@ export const auth = betterAuth({
     discord: {
       clientId: process.env.DISCORD_CLIENT_ID!,
       clientSecret: process.env.DISCORD_SECRET!,
+      mapProfileToUser: (profile) => ({
+        id: profile.id,
+        name: profile.global_name || profile.username,
+        email: profile.email ?? `${profile.id}@discord.local`,
+        image: profile.avatar
+          ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png`
+          : undefined,
+      }),
     },
   },
   session: {
