@@ -75,9 +75,9 @@ function decodeHtmlEntities(text: string): string {
     .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)));
 }
 
-async function getSpotifyPlaylistTracksViaEmbed(playlistId: string): Promise<{ name: string; tracks: ScrapedSpotifyTrack[] } | null> {
+async function getSpotifyTracksViaEmbed(spotifyType: "playlist" | "album", spotifyId: string): Promise<{ name: string; tracks: ScrapedSpotifyTrack[] } | null> {
   try {
-    const url = `https://open.spotify.com/playlist/${playlistId}`;
+    const url = `https://open.spotify.com/${spotifyType}/${spotifyId}`;
     const res = await fetch(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
@@ -87,7 +87,7 @@ async function getSpotifyPlaylistTracksViaEmbed(playlistId: string): Promise<{ n
     const html = await res.text();
 
     const titleMatch = html.match(/<title>(.+?)<\/title>/i);
-    const name = titleMatch ? decodeHtmlEntities(titleMatch[1]).replace(/\s*\|\s*Spotify\s*(Playlist)?$/i, "").trim() : "Imported Spotify Playlist";
+    const name = titleMatch ? decodeHtmlEntities(titleMatch[1]).replace(/\s*\|\s*Spotify\s*(Playlist|Album)?$/i, "").trim() : "Imported Spotify Playlist";
 
     const trackNameRegex = /aria-label="([^"]+)"\s+data-testid="track-row"/g;
     const trackNames: string[] = [];
@@ -100,14 +100,19 @@ async function getSpotifyPlaylistTracksViaEmbed(playlistId: string): Promise<{ n
 
     const parts = html.split('data-testid="track-row"');
     const artistRegex = /data-testid="internal-artist-link">[^<]*<a[^>]*>([^<]+)<\/a>/g;
+    const albumArtistRegex = /href="\/artist\/[^"]+"[^>]*>([^<]+)<\/a>/g;
     const tracks: ScrapedSpotifyTrack[] = [];
 
     for (let i = 0; i < trackNames.length; i++) {
       const part = parts[i + 1] || "";
       const artists: string[] = [];
       let am: RegExpExecArray | null;
-      while ((am = artistRegex.exec(part)) !== null) {
-        artists.push(decodeHtmlEntities(am[1].trim()));
+      const isAlbum = spotifyType === "album";
+      const artistSource = isAlbum ? albumArtistRegex : artistRegex;
+      artistSource.lastIndex = 0;
+      while ((am = artistSource.exec(part)) !== null) {
+        const name = decodeHtmlEntities(am[1].trim());
+        if (!artists.includes(name)) artists.push(name);
       }
       const artistName = artists.length > 0 ? artists.join(", ") : "Unknown Artist";
       tracks.push({ trackName: trackNames[i], artistName });
@@ -710,11 +715,12 @@ playlistsRoute.post("/import", async (c) => {
         5
       );
     } else {
-      // Spotify
-      const spotifyRegex = /playlist\/([a-zA-Z0-9]+)/;
-      const match = url.match(spotifyRegex);
-      const playlistId = match ? match[1] : null;
-      if (!playlistId) return c.json({ error: "Could not parse Spotify playlist ID from URL" }, 400);
+      // Spotify (playlist or album)
+      const spotifyRegex = /\/(playlist|album)\/([a-zA-Z0-9]+)/;
+      const sm = url.match(spotifyRegex);
+      const spotifyType = sm ? sm[1] : null;
+      const spotifyId = sm ? sm[2] : null;
+      if (!spotifyType || !spotifyId) return c.json({ error: "Could not parse Spotify playlist/album ID from URL" }, 400);
 
       let tracksToResolve: { trackName: string; artistName: string; image?: string; durationMs?: number }[] = [];
       let fetchedSuccessfully = false;
@@ -726,17 +732,20 @@ playlistsRoute.post("/import", async (c) => {
         try {
           const accessToken = await getSpotifyAccessToken(clientId, clientSecret);
           if (accessToken) {
-            const spotifyRes = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}`, {
+            const spotifyRes = await fetch(`https://api.spotify.com/v1/${spotifyType}s/${spotifyId}`, {
               headers: { Authorization: `Bearer ${accessToken}` },
             });
             if (spotifyRes.ok) {
               const pd = await spotifyRes.json();
               name = pd.name || "Imported Spotify Playlist";
-              tracksToResolve = (pd.tracks?.items || []).map((item: any) => ({
-                trackName: item?.track?.name || "Unknown Track",
-                artistName: item?.track?.artists?.map((a: any) => a.name).join(", ") || "Unknown Artist",
-                image: item?.track?.album?.images?.[0]?.url || "",
-                durationMs: item?.track?.duration_ms || 0,
+              const rawItems = spotifyType === "album"
+                ? (pd.tracks?.items || [])
+                : (pd.tracks?.items || []);
+              tracksToResolve = rawItems.map((item: any) => ({
+                trackName: item?.name || item?.track?.name || "Unknown Track",
+                artistName: item?.artists?.map((a: any) => a.name).join(", ") || item?.track?.artists?.map((a: any) => a.name).join(", ") || "Unknown Artist",
+                image: item?.images?.[0]?.url || item?.track?.album?.images?.[0]?.url || "",
+                durationMs: item?.duration_ms || item?.track?.duration_ms || 0,
               }));
               fetchedSuccessfully = true;
             }
@@ -747,7 +756,7 @@ playlistsRoute.post("/import", async (c) => {
       }
 
       if (!fetchedSuccessfully) {
-        const scraped = await getSpotifyPlaylistTracksViaEmbed(playlistId);
+        const scraped = await getSpotifyTracksViaEmbed(spotifyType, spotifyId);
         if (scraped) {
           name = scraped.name;
           tracksToResolve = scraped.tracks;
@@ -756,7 +765,7 @@ playlistsRoute.post("/import", async (c) => {
       }
 
       if (!fetchedSuccessfully) {
-        return c.json({ error: "Failed to fetch Spotify playlist. Ensure the playlist is public." }, 404);
+        return c.json({ error: "Failed to fetch Spotify playlist/album. Ensure it is public." }, 404);
       }
 
       tracks = await resolveChunked(tracksToResolve, 2);
