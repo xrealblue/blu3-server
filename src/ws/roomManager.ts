@@ -265,13 +265,6 @@ export async function getPlaybackMode(code: string): Promise<PlaybackMode> {
   return legacyManager.getPlaybackMode(code);
 }
 
-export async function setPlaybackMode(code: string, mode: Partial<PlaybackMode>) {
-  const updates: Partial<TimelineState> = {};
-  if (mode.shuffle !== undefined) updates.shuffle = mode.shuffle;
-  if (mode.repeatMode !== undefined) updates.repeatMode = mode.repeatMode;
-  await legacyManager.setTimeline(code, updates);
-}
-
 export async function getQueue(code: string): Promise<QueueTrack[]> {
   return legacyManager.getQueue(code);
 }

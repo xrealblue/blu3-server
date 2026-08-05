@@ -17,41 +17,6 @@ export function currentPosition(timeline: TimelineSnapshot, serverNow: number): 
   return Math.max(0, timeline.positionSec + elapsed);
 }
 
-export function snapToServerTime(
-  timeline: TimelineSnapshot,
-  clientPositionSec: number,
-  serverNow: number,
-): TimelineSnapshot {
-  return {
-    ...timeline,
-    positionSec: clientPositionSec,
-    anchorServerTime: serverNow,
-  };
-}
-
-export function createPlaySnapshot(
-  videoId: string,
-  trackName: string,
-  artistName: string,
-  image: string,
-  seekToSec: number,
-  serverNow: number,
-  durationMs = 0,
-): TimelineSnapshot {
-  return {
-    videoId,
-    trackName,
-    artistName,
-    image,
-    isPlaying: true,
-    positionSec: seekToSec,
-    anchorServerTime: serverNow,
-    startedAt: serverNow,
-    pausedDurationMs: 0,
-    durationMs,
-  };
-}
-
 export function createResumeSnapshot(
   timeline: TimelineSnapshot,
   serverNow: number,
@@ -87,16 +52,4 @@ export function effectiveElapsedMs(timeline: TimelineSnapshot, serverNow: number
     return Math.max(0, wallMs - pausedMs - currentPauseMs);
   }
   return Math.max(0, wallMs - pausedMs);
-}
-
-export function createSeekSnapshot(
-  timeline: TimelineSnapshot,
-  seekToSec: number,
-  serverNow: number,
-): TimelineSnapshot {
-  return {
-    ...timeline,
-    positionSec: Math.max(0, seekToSec),
-    anchorServerTime: serverNow,
-  };
 }

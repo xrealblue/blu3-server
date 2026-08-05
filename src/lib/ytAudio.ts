@@ -6,13 +6,13 @@ async function getYTMusic(): Promise<YTMusic> {
   if (!ytmusicInstance) {
     ytmusicInstance = new YTMusic();
     await ytmusicInstance.initialize();
-    // Fallback when scraping fails (data center IPs / VM)
-    if (!(ytmusicInstance as any).apiKey) {
-      (ytmusicInstance as any).apiKey = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+    const fallbackKey = process.env.YTMUSIC_API_KEY;
+    if (!(ytmusicInstance as any).apiKey && fallbackKey) {
+      (ytmusicInstance as any).apiKey = fallbackKey;
       (ytmusicInstance as any).context = {
         client: {
           clientName: "WEB_REMIX",
-          clientVersion: "1.20250204.01.00",
+          clientVersion: process.env.YTMUSIC_CLIENT_VERSION || "1.20250204.01.00",
         },
       };
     }
@@ -47,17 +47,6 @@ function upscaleThumbnail(url: string): string {
 
 function bestThumbnail(thumbnails: Array<{ url: string; width: number; height: number }>): string {
   return upscaleThumbnail(thumbnails?.at(-1)?.url || "");
-}
-
-export async function searchYouTube(query: string): Promise<string | null> {
-  try {
-    const yt = await getYTMusic();
-    const results = await yt.searchSongs(query);
-    return results[0]?.videoId || null;
-  } catch (err) {
-    console.error(`[ytAudio] searchYouTube("${query}") failed:`, err);
-    return null;
-  }
 }
 
 export async function searchYouTubeWithMetadata(query: string): Promise<YouTubeSearchResult | null> {

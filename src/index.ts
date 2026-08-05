@@ -13,8 +13,8 @@ import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
 
 import { handleWS } from "./ws/handler.js";
-import { resolveJioSaavn, resolveJioSaavnById, searchJioSaavnResults } from "./lib/jiosaavnAudio.js";
-import { searchYouTube, searchYouTubeResults, getYoutubeMusicAlbumArt, getYouTubeVideoInfo, searchYouTubeWithMetadata, getYouTubeAudioUrl } from "./lib/ytAudio.js";
+import { resolveJioSaavn, resolveJioSaavnById } from "./lib/jiosaavnAudio.js";
+import { searchYouTubeResults, getYoutubeMusicAlbumArt, getYouTubeVideoInfo, searchYouTubeWithMetadata, getYouTubeAudioUrl } from "./lib/ytAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
 
 
@@ -173,7 +173,6 @@ app.get("/api/search", async (c) => {
     return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
   }
 
-  // const tracks = await searchJioSaavnResults(q);
   const ytResults = await searchYouTubeResults(q);
   const tracks = ytResults.map((r) => ({
     id: r.videoId,
