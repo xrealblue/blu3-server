@@ -1,5 +1,3 @@
-import { getRedis } from "./redis.js";
-
 export type BroadcastPayload = Record<string, unknown>;
 
 export interface Broadcaster {
@@ -44,38 +42,5 @@ export class LocalBroadcaster implements Broadcaster {
 
   destroyRoom(roomCode: string): void {
     this.rooms.delete(roomCode);
-  }
-}
-
-export class RedisPubSubBroadcaster implements Broadcaster {
-  private local: LocalBroadcaster;
-
-  constructor() {
-    this.local = new LocalBroadcaster();
-  }
-
-  broadcast(roomCode: string, msg: BroadcastPayload, excludeSocketId?: string): void {
-    this.local.broadcast(roomCode, msg, excludeSocketId);
-    const r = getRedis();
-    if (r) {
-      const pub = { ...msg, _exclude: excludeSocketId, _room: roomCode };
-      r.publish(`room:${roomCode}`, JSON.stringify(pub)).catch(() => {});
-    }
-  }
-
-  sendTo(socketId: string, roomCode: string, msg: BroadcastPayload): void {
-    this.local.sendTo(socketId, roomCode, msg);
-  }
-
-  addSocket(socketId: string, roomCode: string, send: (msg: string) => void): void {
-    this.local.addSocket(socketId, roomCode, send);
-  }
-
-  removeSocket(socketId: string, roomCode: string): void {
-    this.local.removeSocket(socketId, roomCode);
-  }
-
-  destroyRoom(roomCode: string): void {
-    this.local.destroyRoom(roomCode);
   }
 }
