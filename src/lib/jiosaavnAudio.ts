@@ -1,4 +1,5 @@
 import CryptoJS from "crypto-js";
+import { normalizeStr, isDurationMatchMs, upscaleJioImage } from "./matching.js";
 
 const JIOSAAVN_DES_KEY = "38346591";
 const SEARCH_BASE = "https://www.jiosaavn.com/api.php";
@@ -82,7 +83,7 @@ async function searchJioSaavn(query: string): Promise<JioSong | null> {
     title: raw.song || raw.title || "",
     album: raw.album || "",
     artists: raw.primary_artists || raw.singers || raw.music || "",
-    image: (raw.image || "").replace("150x150", "500x500").replace("50x50", "500x500").replace("1080x1080", "500x500"),
+    image: upscaleJioImage(raw.image || ""),
     duration: Number(raw.duration) || 0,
     has320: raw["320kbps"] === "true" || raw["320kbps"] === true,
     encryptedUrl: raw.encrypted_media_url || "",
@@ -115,7 +116,7 @@ async function getSongDetails(id: string): Promise<JioSong | null> {
     title: raw.song || raw.title || "",
     album: raw.album || "",
     artists: raw.primary_artists || raw.singers || raw.music || "",
-    image: (raw.image || "").replace("150x150", "500x500").replace("50x50", "500x500").replace("1080x1080", "500x500"),
+    image: upscaleJioImage(raw.image || ""),
     duration: Number(raw.duration) || 0,
     has320: raw["320kbps"] === "true" || raw["320kbps"] === true,
     encryptedUrl: raw.encrypted_media_url || "",
@@ -126,10 +127,6 @@ function normalizeQuery(name: string, artists?: string): string {
   let q = name.trim();
   if (artists?.trim()) q += ` ${artists.trim().split(",")[0].trim()}`;
   return q.toLowerCase().replace(/\(.*?\)/g, "").replace(/\[.*?\]/g, "").trim();
-}
-
-function normalizeStr(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
 }
 
 function isJioMatch(title: string, expectedTitle: string): boolean {
@@ -168,7 +165,7 @@ export async function searchJioSaavnResults(query: string): Promise<JioSearchTra
       duration_ms: (Number(raw.duration) || 0) * 1000,
       artists: [{ name: raw.primary_artists || raw.singers || raw.music || "Unknown" }],
       album: { name: raw.album || "" },
-image: (raw.image || "").replace("150x150", "500x500").replace("50x50", "500x500").replace("1080x1080", "500x500"),
+image: upscaleJioImage(raw.image || ""),
       source: "jiosaavn",
     }));
   } catch (err) {
@@ -194,7 +191,7 @@ export async function resolveJioSaavnById(id: string, expectedName?: string): Pr
 function isDurationMatch(actualSec: number, expectedMs: number | undefined): boolean {
   if (!expectedMs) return true;
   if (!actualSec) return true;
-  return Math.abs(actualSec * 1000 - expectedMs) < 3000;
+  return isDurationMatchMs(actualSec * 1000, expectedMs);
 }
 
 export async function resolveJioSaavn(

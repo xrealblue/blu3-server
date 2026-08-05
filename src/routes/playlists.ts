@@ -1,26 +1,16 @@
-import { Hono, type MiddlewareHandler } from "hono";
+import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { playlists, playlistTracks } from "../db/schema.js";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { searchJioSaavnResults } from "../lib/jiosaavnAudio.js";
 import { searchYouTubeWithMetadata } from "../lib/ytAudio.js";
-import { getSessionFromRequest } from "../lib/auth.js";
 import { getCached, setCache } from "../lib/responseCache.js";
+import { normalizeStr, isDurationMatchMs, upscaleJioImage } from "../lib/matching.js";
+import { requireAuth, type AuthEnv } from "../lib/requireAuth.js";
 
-type PlaylistsEnv = {
-  Variables: {
-    userId: string;
-  };
-};
+type PlaylistsEnv = AuthEnv;
 
 const playlistsRoute = new Hono<PlaylistsEnv>();
-
-const requireAuth: MiddlewareHandler<PlaylistsEnv> = async (c, next) => {
-  const session = await getSessionFromRequest(c.req.raw.headers);
-  if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
-  c.set("userId", session.user.id);
-  await next();
-};
 
 playlistsRoute.use("*", requireAuth);
 
@@ -241,10 +231,6 @@ async function getAppleMusicPlaylistTracks(url: string): Promise<{ name: string;
   }
 }
 
-function normalizeStr(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
-}
-
 function isMatch(title: string, artist: string, expectedTitle: string, expectedArtist: string): boolean {
   const cleanTitle = normalizeStr(title);
   const cleanArtist = normalizeStr(artist);
@@ -265,11 +251,6 @@ function isMatch(title: string, artist: string, expectedTitle: string, expectedA
   return (titleMatch || partialMatch) && artistMatch;
 }
 
-function isDurationMatch(actualMs: number, expectedMs: number | undefined): boolean {
-  if (!expectedMs || !actualMs) return true;
-  return Math.abs(actualMs - expectedMs) < 3000;
-}
-
 async function resolveTrackToJioSaavn(
   trackName: string,
   artistName: string,
@@ -287,7 +268,7 @@ async function resolveTrackToJioSaavn(
       ]);
       const match = results.find((r) =>
         isMatch(r.name, r.artists[0]?.name || "", trackName, artistName) &&
-        isDurationMatch(r.duration_ms, durationMs)
+        isDurationMatchMs(r.duration_ms, durationMs)
       );
       if (match) {
         return {
@@ -350,7 +331,7 @@ async function getJioSaavnPlaylistTracks(url: string): Promise<{ name: string; t
         id: s.id || "",
         title: s.song || s.title || "Unknown Track",
         artists: s.primary_artists || s.singers || s.music || "Unknown Artist",
-        image: (s.image || "").replace("150x150", "500x500").replace("50x50", "500x500").replace("1080x1080", "500x500"),
+        image: upscaleJioImage(s.image || ""),
         duration: Number(s.duration) || 0,
       })),
     };
@@ -740,12 +721,12 @@ playlistsRoute.post("/import", async (c) => {
               name = pd.name || "Imported Spotify Playlist";
               const rawItems = spotifyType === "album"
                 ? (pd.tracks?.items || [])
-                : (pd.tracks?.items || []);
+                : ((pd.tracks?.items || []).map((i: any) => i?.track).filter(Boolean));
               tracksToResolve = rawItems.map((item: any) => ({
-                trackName: item?.name || item?.track?.name || "Unknown Track",
-                artistName: item?.artists?.map((a: any) => a.name).join(", ") || item?.track?.artists?.map((a: any) => a.name).join(", ") || "Unknown Artist",
-                image: item?.images?.[0]?.url || item?.track?.album?.images?.[0]?.url || "",
-                durationMs: item?.duration_ms || item?.track?.duration_ms || 0,
+                trackName: item?.name || "Unknown Track",
+                artistName: item?.artists?.map((a: any) => a.name).join(", ") || "Unknown Artist",
+                image: item?.album?.images?.[0]?.url || "",
+                durationMs: item?.duration_ms || 0,
               }));
               fetchedSuccessfully = true;
             }

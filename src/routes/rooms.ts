@@ -1,25 +1,14 @@
-import { Hono, type MiddlewareHandler } from "hono";
+import { Hono } from "hono";
 import { db } from "../db/index.js";
 import { rooms, roomMembers, users, roomTrackHistory } from "../db/schema.js";
 import { eq, and, desc } from "drizzle-orm";
 import { customAlphabet } from "nanoid";
-import { getSessionFromRequest } from "../lib/auth.js";
 import { getCached, setCache } from "../lib/responseCache.js";
+import { requireAuth, type AuthEnv } from "../lib/requireAuth.js";
 
-type RoomsEnv = {
-  Variables: {
-    userId: string;
-  };
-};
+type RoomsEnv = AuthEnv;
 
 const roomsRoute = new Hono<RoomsEnv>();
-
-const requireAuth: MiddlewareHandler<RoomsEnv> = async (c, next) => {
-  const session = await getSessionFromRequest(c.req.raw.headers);
-  if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
-  c.set("userId", session.user.id);
-  await next();
-};
 
 const genCode = customAlphabet("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 6);
 

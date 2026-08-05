@@ -41,6 +41,24 @@ function clampTime(v: number | undefined | null, max = MAX_SEEK_SEC): number {
   return Number.isFinite(n) ? Math.max(0, Math.min(n, max)) : 0;
 }
 
+function preResolveTrack(roomCode: string, nt: QueueTrack | null | undefined): void {
+  if (!nt?.videoId) return;
+  (async () => {
+    let url: string | null = null;
+    const preferYoutube = nt.source === "youtube";
+
+    if (!preferYoutube && nt.name?.trim()) {
+      const jr = await resolveJioSaavn(nt.videoId, nt.name, nt.artists?.[0]?.name, nt.duration_ms).catch(() => null);
+      if (jr?.url) url = `/api/audio/${nt.videoId}`;
+    }
+    if (!url && /^[a-zA-Z0-9_-]{11}$/.test(nt.videoId)) {
+      const yt = await getYouTubeAudioUrl(nt.videoId).catch(() => null);
+      if (yt) url = `/api/audio/${nt.videoId}`;
+    }
+    if (url) broadcast(roomCode, { type: "track:preresolved", videoId: nt.videoId, audioUrl: url });
+  })();
+}
+
 // ── Server-side auto-advance timers ──────────────────────
 const advanceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -149,23 +167,7 @@ async function handleTrackEnd(roomCode: string) {
     // Pre-resolve next-next track
     const allQ = await getQueue(roomCode);
     const nextNextTrack = allQ.length > 2 ? allQ[2] ?? allQ[1] : null;
-    if (nextNextTrack?.videoId) {
-      const nt = nextNextTrack;
-      (async () => {
-        let url: string | null = null;
-        const preferYoutube = nt.source === "youtube";
-
-        if (!preferYoutube && nt.name?.trim()) {
-          const jr = await resolveJioSaavn(nt.videoId, nt.name, nt.artists?.[0]?.name, nt.duration_ms).catch(() => null);
-          if (jr?.url) url = `/api/audio/${nt.videoId}`;
-        }
-        if (!url && /^[a-zA-Z0-9_-]{11}$/.test(nt.videoId)) {
-          const yt = await getYouTubeAudioUrl(nt.videoId).catch(() => null);
-          if (yt) url = `/api/audio/${nt.videoId}`;
-        }
-        if (url) broadcast(roomCode, { type: "track:preresolved", videoId: nt.videoId, audioUrl: url });
-      })();
-    }
+    preResolveTrack(roomCode, nextNextTrack);
   } else {
     await setPlayback(roomCode, { isPlaying: false, updatedAt: serverNow });
   }
@@ -561,22 +563,7 @@ export async function handleWS(ws: any, url: URL) {
           // Pre-resolve next track (Layer 3: server pre-push)
           getQueue(roomCode).then(q => {
             const nextTrack = q.length > 1 ? q[1] ?? q[0] : q[0];
-            if (!nextTrack?.videoId) return;
-            const nt = nextTrack;
-            (async () => {
-              let url: string | null = null;
-              const preferYoutube = nt.source === "youtube";
-
-              if (!preferYoutube && nt.name?.trim()) {
-                const jr = await resolveJioSaavn(nt.videoId, nt.name, nt.artists?.[0]?.name, nt.duration_ms).catch(() => null);
-                if (jr?.url) url = `/api/audio/${nt.videoId}`;
-              }
-              if (!url && /^[a-zA-Z0-9_-]{11}$/.test(nt.videoId)) {
-                const yt = await getYouTubeAudioUrl(nt.videoId).catch(() => null);
-                if (yt) url = `/api/audio/${nt.videoId}`;
-              }
-              if (url) broadcast(roomCode, { type: "track:preresolved", videoId: nt.videoId, audioUrl: url });
-            })();
+            preResolveTrack(roomCode, nextTrack);
           }).catch(() => {});
           break;
         }
