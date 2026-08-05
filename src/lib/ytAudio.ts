@@ -1,4 +1,3 @@
-// ── ytmusic-api ──
 
 import YTMusic from "ytmusic-api";
 

@@ -11,7 +11,7 @@ import * as schema from "./db/schema.js";
 import { eq } from "drizzle-orm";
 import roomsRoute from "./routes/rooms.js";
 import playlistsRoute from "./routes/playlists.js";
-import audioFallbackRoute from "./routes/audioFallback.js";
+
 import { handleWS } from "./ws/handler.js";
 import { resolveJioSaavn, resolveJioSaavnById, searchJioSaavnResults } from "./lib/jiosaavnAudio.js";
 import { searchYouTube, searchYouTubeResults, getYoutubeMusicAlbumArt, getYouTubeVideoInfo, searchYouTubeWithMetadata, getYouTubeAudioUrl } from "./lib/ytAudio.js";
@@ -140,7 +140,6 @@ app.on(["GET", "POST"], "/api/auth/*", async (c) => {
 
 app.route("/api/rooms", roomsRoute);
 app.route("/api/playlists", playlistsRoute);
-app.route("/api", audioFallbackRoute);
 
 app.get(
   "/ws",
