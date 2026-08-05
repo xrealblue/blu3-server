@@ -2,7 +2,7 @@
 
 Real-time collaborative music room backend for [Blu3](https://blu3.in). Powers room state, synchronized playback, the collaborative queue, chat, playlists, and audio resolution across YouTube + JioSaavn. Built with [Hono](https://hono.dev/), [Drizzle ORM](https://orm.drizzle.team/), [better-auth](https://www.better-auth.com/), and [Upstash Redis](https://upstash.com/).
 
-> The frontend lives in [`blu3-client`](https://github.com/xrealblue/blu3) — this repo is the API + WebSocket server it talks to. If you're contributing to the client, you only need a running `blu3-server` instance and the three `NEXT_PUBLIC_*` env vars described in [Connecting the frontend](#connecting-the-frontend).
+> The frontend lives in [`blu3-client`](../blu3-client) — this repo is the API + WebSocket server it talks to. If you're contributing to the client, you only need a running `blu3-server` instance and the three `NEXT_PUBLIC_*` env vars described in [Connecting the frontend](#connecting-the-frontend).
 
 ## Quick Start
 
