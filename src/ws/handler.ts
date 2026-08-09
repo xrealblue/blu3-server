@@ -203,6 +203,7 @@ type IncomingMessage =
   | { type: "playback:sync_request" }
   | { type: "clock_sync_request" }
   | { type: "chat:send"; text: string }
+  | { type: "like:burst" }
   | { type: "queue:add"; track: QueueTrack }
   | { type: "queue:remove"; trackId: string }
   | { type: "queue:cycle_current"; trackId: string }
@@ -437,6 +438,10 @@ export async function handleWS(ws: any, url: URL) {
             ts: serverNow,
           };
           broadcast(roomCode, { type: "chat:message", message: chatMsg });
+          break;
+        }
+        case "like:burst": {
+          broadcast(roomCode, { type: "room:like_burst", userId: user.id });
           break;
         }
         case "playback:play": {
