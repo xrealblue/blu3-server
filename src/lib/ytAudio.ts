@@ -1,8 +1,9 @@
 
 import YTMusic from "ytmusic-api";
 import { execSync } from "child_process";
-import ytdl from "ytdl-core-enhanced";
 import { existsSync } from "fs";
+// @ts-ignore - ytdl-core-enhanced has broken typings
+import ytdl from "ytdl-core-enhanced";
 
 let ytmusicInstance: YTMusic | null = null;
 async function getYTMusic(): Promise<YTMusic> {
