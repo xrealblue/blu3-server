@@ -1,6 +1,7 @@
 
 import YTMusic from "ytmusic-api";
 import { execSync } from "child_process";
+import ytdl from "ytdl-core-enhanced";
 
 let ytmusicInstance: YTMusic | null = null;
 async function getYTMusic(): Promise<YTMusic> {
@@ -115,6 +116,19 @@ function tryYtDlp(videoId: string): string | null {
   return null;
 }
 
+async function tryYtdlCore(videoId: string, signal?: AbortSignal): Promise<string | null> {
+  try {
+    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`);
+    if (signal?.aborted) return null;
+    const audioFormats = info.formats
+      .filter((f: any) => f.mimeType?.startsWith("audio/") && f.hasAudio)
+      .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+    return audioFormats[0]?.url || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal, depth = 0): Promise<string | null> {
   if (depth > 2) return null;
   try {
@@ -133,6 +147,10 @@ export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal, 
   } catch (err: any) {
     if (err?.name === "AbortError") return null;
   }
+
+  if (signal?.aborted) return null;
+  const ytdlUrl = await tryYtdlCore(videoId, signal);
+  if (ytdlUrl) return ytdlUrl;
 
   if (signal?.aborted) return null;
   const ytdlpUrl = tryYtDlp(videoId);
