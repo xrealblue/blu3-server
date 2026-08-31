@@ -431,14 +431,17 @@ app.get("/api/audio/:videoId", async (c) => {
   if (!cached) return c.json({ error: "Audio not found or expired" }, 404);
 
   try {
+    const isYoutube = cached.cdnUrl.includes("googlevideo.com") || cached.cdnUrl.includes("ytimg.com");
     const cdnRes = await fetch(cached.cdnUrl, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://www.jiosaavn.com/",
-        "Range": c.req.header("Range") ?? "",
+        "Referer": isYoutube ? "https://www.youtube.com/" : "https://www.jiosaavn.com/",
+        "Origin": isYoutube ? "https://www.youtube.com/" : "https://www.jiosaavn.com/",
+        ...(c.req.header("Range") ? { "Range": c.req.header("Range")! } : {}),
       },
     });
     if (!cdnRes.ok && cdnRes.status !== 206) {
+      console.error(`[AudioProxy] CDN returned ${cdnRes.status} for ${videoId} (url=${cached.cdnUrl.slice(0, 80)})`);
       audioCache.delete(videoId);
       return c.json({ error: "Source unavailable" }, 404);
     }
