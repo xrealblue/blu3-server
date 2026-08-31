@@ -1,5 +1,6 @@
 
 import YTMusic from "ytmusic-api";
+import { execSync } from "child_process";
 
 let ytmusicInstance: YTMusic | null = null;
 async function getYTMusic(): Promise<YTMusic> {
@@ -96,6 +97,24 @@ export async function getYoutubeMusicAlbumArt(name: string, artist?: string): Pr
   }
 }
 
+function tryYtDlp(videoId: string): string | null {
+  const url = `"https://youtube.com/watch?v=${videoId}"`;
+  const strategies = [
+    { cmd: `yt-dlp --no-update --extractor-args "youtube:player_client=android" -f bestaudio -g ${url}`, timeout: 15000 },
+    { cmd: `yt-dlp --proxy socks5://127.0.0.1:1080 --no-update --extractor-args "youtube:player_client=android" -f bestaudio -g ${url}`, timeout: 20000 },
+    { cmd: `yt-dlp --proxy socks5://127.0.0.1:1080 --no-update --extractor-args "youtube:player_client=tv_downgraded" -f bestaudio -g ${url}`, timeout: 20000 },
+  ];
+
+  for (const { cmd, timeout } of strategies) {
+    try {
+      const result = execSync(cmd, { timeout, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      const audioUrl = result.trim().split("\n")[0];
+      if (audioUrl && audioUrl.startsWith("http")) return audioUrl;
+    } catch {}
+  }
+  return null;
+}
+
 export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal, depth = 0): Promise<string | null> {
   if (depth > 2) return null;
   try {
@@ -103,20 +122,23 @@ export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal, 
     const data = await withSignal(yt.constructRequest("player", { videoId }), signal) as any;
     const actualVideoId = data?.videoDetails?.videoId;
     if (actualVideoId && actualVideoId !== videoId) {
-      // YouTube redirected the requested videoId to a different video (common in mix/radio URLs).
-      // Re-fetch with the actual videoId to get the correct streaming data.
       return getYouTubeAudioUrl(actualVideoId, signal, depth + 1);
     }
     const formats = data?.streamingData?.adaptiveFormats || [];
     const audio = formats
       .filter((f: any) => f.mimeType?.startsWith("audio/"))
       .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-    return audio?.url || null;
+    const ytUrl = audio?.url || null;
+    if (ytUrl) return ytUrl;
   } catch (err: any) {
     if (err?.name === "AbortError") return null;
-    console.error(`[ytAudio] getYouTubeAudioUrl("${videoId}") failed:`, err);
-    return null;
   }
+
+  if (signal?.aborted) return null;
+  const ytdlpUrl = tryYtDlp(videoId);
+  if (ytdlpUrl) return ytdlpUrl;
+
+  return null;
 }
 
 function withSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
