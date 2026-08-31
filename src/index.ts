@@ -272,6 +272,14 @@ app.post("/api/resolve-download", async (c) => {
     }
   }
 
+  if (body.name?.trim()) {
+    const jioResult = await resolveJioSaavn(body.videoId, body.name, body.artists, body.duration);
+    if (jioResult?.url) {
+      audioCache.set(body.videoId, { cdnUrl: jioResult.url, fetchedAt: Date.now() });
+      return c.json({ source: "jiosaavn", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
+    }
+  }
+
   const ytAudioUrl = await getYouTubeAudioUrlFull(body.videoId);
   if (ytAudioUrl) {
     audioCache.set(body.videoId, { cdnUrl: ytAudioUrl, fetchedAt: Date.now() });
