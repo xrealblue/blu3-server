@@ -2,6 +2,7 @@
 import YTMusic from "ytmusic-api";
 import { execSync } from "child_process";
 import ytdl from "ytdl-core-enhanced";
+import { existsSync } from "fs";
 
 let ytmusicInstance: YTMusic | null = null;
 async function getYTMusic(): Promise<YTMusic> {
@@ -100,42 +101,80 @@ export async function getYoutubeMusicAlbumArt(name: string, artist?: string): Pr
 
 function tryYtDlp(videoId: string): string | null {
   const url = `"https://youtube.com/watch?v=${videoId}"`;
-  const strategies = [
-    { cmd: `yt-dlp --no-update --extractor-args "youtube:player_client=android" -f bestaudio -g ${url}`, timeout: 15000 },
-    { cmd: `yt-dlp --proxy socks5://127.0.0.1:1080 --no-update --extractor-args "youtube:player_client=android" -f bestaudio -g ${url}`, timeout: 20000 },
-    { cmd: `yt-dlp --proxy socks5://127.0.0.1:1080 --no-update --extractor-args "youtube:player_client=tv_downgraded" -f bestaudio -g ${url}`, timeout: 20000 },
+  const cookiesFile = process.env.YT_COOKIES_FILE || "./cookies.txt";
+  const hasCookies = existsSync(cookiesFile);
+  const hasWarp = process.platform !== "win32";
+
+  const strategies: Array<{ name: string; cmd: string; timeout: number }> = [
+    { name: "yt-dlp default", cmd: `yt-dlp --no-update -f bestaudio -g ${url}`, timeout: 20000 },
   ];
 
-  for (const { cmd, timeout } of strategies) {
+  if (hasWarp) {
+    strategies.push(
+      { name: "yt-dlp default + WARP", cmd: `yt-dlp --proxy socks5://127.0.0.1:1080 --no-update -f bestaudio -g ${url}`, timeout: 20000 },
+      { name: "yt-dlp tv_downgraded + WARP", cmd: `yt-dlp --proxy socks5://127.0.0.1:1080 --no-update --extractor-args "youtube:player_client=tv_downgraded" -f bestaudio -g ${url}`, timeout: 20000 },
+    );
+  }
+
+  if (hasCookies) {
+    strategies.push(
+      { name: "yt-dlp web + cookies", cmd: `yt-dlp --no-update --cookies ${cookiesFile} -f bestaudio -g ${url}`, timeout: 15000 },
+    );
+  }
+
+  for (const { name, cmd, timeout } of strategies) {
     try {
+      console.log(`[ytAudio] tryYtDlp — trying: ${name}`);
       const result = execSync(cmd, { timeout, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
       const audioUrl = result.trim().split("\n")[0];
-      if (audioUrl && audioUrl.startsWith("http")) return audioUrl;
-    } catch {}
+      if (audioUrl && audioUrl.startsWith("http")) {
+        console.log(`[ytAudio] tryYtDlp — SUCCESS: ${name}`);
+        return audioUrl;
+      }
+      console.log(`[ytAudio] tryYtDlp — ${name} returned non-URL: ${audioUrl?.slice(0, 80)}`);
+    } catch (err: any) {
+      const stderr = err?.stderr?.toString()?.slice(0, 200) || "";
+      const msg = err?.message?.slice(0, 120) || "unknown";
+      console.error(`[ytAudio] tryYtDlp — ${name} FAILED: ${msg}`);
+      if (stderr) console.error(`[ytAudio] tryYtDlp — ${name} stderr: ${stderr}`);
+    }
   }
+  console.error(`[ytAudio] tryYtDlp — ALL STRATEGIES FAILED for ${videoId}`);
   return null;
 }
 
 async function tryYtdlCore(videoId: string, signal?: AbortSignal): Promise<string | null> {
   try {
+    console.log(`[ytAudio] tryYtdlCore — fetching info for ${videoId}`);
     const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`);
-    if (signal?.aborted) return null;
+    if (signal?.aborted) {
+      console.log(`[ytAudio] tryYtdlCore — aborted`);
+      return null;
+    }
     const audioFormats = info.formats
       .filter((f: any) => f.mimeType?.startsWith("audio/") && f.hasAudio)
       .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
-    return audioFormats[0]?.url || null;
-  } catch {
+    const url = audioFormats[0]?.url || null;
+    if (url) console.log(`[ytAudio] tryYtdlCore — SUCCESS`);
+    else console.log(`[ytAudio] tryYtdlCore — no audio formats found`);
+    return url;
+  } catch (err: any) {
+    console.error(`[ytAudio] tryYtdlCore — FAILED: ${err?.message?.slice(0, 120) || "unknown"}`);
     return null;
   }
 }
 
 export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal, depth = 0): Promise<string | null> {
   if (depth > 2) return null;
+  console.log(`[ytAudio] getYouTubeAudioUrl — videoId=${videoId} depth=${depth}`);
+
+  // ── Strategy 1: ytmusic-api ──
   try {
     const yt = await getYTMusic() as any;
     const data = await withSignal(yt.constructRequest("player", { videoId }), signal) as any;
     const actualVideoId = data?.videoDetails?.videoId;
     if (actualVideoId && actualVideoId !== videoId) {
+      console.log(`[ytAudio] ytmusic-api — redirected to ${actualVideoId}, re-fetching`);
       return getYouTubeAudioUrl(actualVideoId, signal, depth + 1);
     }
     const formats = data?.streamingData?.adaptiveFormats || [];
@@ -143,19 +182,30 @@ export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal, 
       .filter((f: any) => f.mimeType?.startsWith("audio/"))
       .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
     const ytUrl = audio?.url || null;
-    if (ytUrl) return ytUrl;
+    if (ytUrl) {
+      console.log(`[ytAudio] ytmusic-api — SUCCESS`);
+      return ytUrl;
+    }
+    console.log(`[ytAudio] ytmusic-api — no audio URL in response`);
   } catch (err: any) {
-    if (err?.name === "AbortError") return null;
+    if (err?.name === "AbortError") {
+      console.log(`[ytAudio] ytmusic-api — aborted`);
+      return null;
+    }
+    console.error(`[ytAudio] ytmusic-api — FAILED: ${err?.message?.slice(0, 120) || "unknown"}`);
   }
 
+  // ── Strategy 2: ytdl-core-enhanced ──
   if (signal?.aborted) return null;
   const ytdlUrl = await tryYtdlCore(videoId, signal);
   if (ytdlUrl) return ytdlUrl;
 
+  // ── Strategy 3-5: yt-dlp ──
   if (signal?.aborted) return null;
   const ytdlpUrl = tryYtDlp(videoId);
   if (ytdlpUrl) return ytdlpUrl;
 
+  console.error(`[ytAudio] getYouTubeAudioUrl — ALL FALLBACKS FAILED for ${videoId}`);
   return null;
 }
 

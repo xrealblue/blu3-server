@@ -232,7 +232,7 @@ app.post("/api/resolve", async (c) => {
   }
 
   if (isYouTubeId) {
-    const ytAudioUrl = await getYouTubeAudioUrl(body.videoId, AbortSignal.timeout(6000));
+    const ytAudioUrl = await getYouTubeAudioUrl(body.videoId, AbortSignal.timeout(45000));
     if (ytAudioUrl) {
       return cacheAndReturn(ytAudioUrl, "youtube");
     }
@@ -273,7 +273,7 @@ app.post("/api/resolve-link", async (c) => {
   if (!rl.success) return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
 
   const preResolveAudio = (vid: string) => {
-    getYouTubeAudioUrl(vid, AbortSignal.timeout(8000))
+    getYouTubeAudioUrl(vid, AbortSignal.timeout(45000))
       .then((ytUrl) => { if (ytUrl) audioCache.set(vid, { cdnUrl: ytUrl, fetchedAt: Date.now() }); })
       .catch(() => {});
   };
@@ -388,7 +388,7 @@ async function resolveAudioUrl(videoId: string): Promise<string | null> {
     if (jioResult?.url) return jioResult.url;
   }
   if (/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-    const ytAudioUrl = await getYouTubeAudioUrl(videoId, AbortSignal.timeout(6000));
+    const ytAudioUrl = await getYouTubeAudioUrl(videoId, AbortSignal.timeout(45000));
     if (ytAudioUrl) return ytAudioUrl;
   }
   return null;
