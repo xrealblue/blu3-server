@@ -14,7 +14,7 @@ import playlistsRoute from "./routes/playlists.js";
 
 import { handleWS } from "./ws/handler.js";
 import { resolveJioSaavn, resolveJioSaavnById } from "./lib/jiosaavnAudio.js";
-import { searchYouTubeResults, getYoutubeMusicAlbumArt, getYouTubeVideoInfo, searchYouTubeWithMetadata, getYouTubeAudioUrl } from "./lib/ytAudio.js";
+import { searchYouTubeResults, getYoutubeMusicAlbumArt, getYouTubeVideoInfo, searchYouTubeWithMetadata, getYouTubeAudioUrl, getYouTubeAudioUrlFull } from "./lib/ytAudio.js";
 import { checkRateLimit } from "./lib/ratelimit.js";
 
 
@@ -232,7 +232,7 @@ app.post("/api/resolve", async (c) => {
   }
 
   if (isYouTubeId) {
-    const ytAudioUrl = await getYouTubeAudioUrl(body.videoId, AbortSignal.timeout(45000));
+    const ytAudioUrl = await getYouTubeAudioUrl(body.videoId, AbortSignal.timeout(6000));
     if (ytAudioUrl) {
       return cacheAndReturn(ytAudioUrl, "youtube");
     }
@@ -247,6 +247,38 @@ app.post("/api/resolve", async (c) => {
 
   const albumArt = body.name ? await getYoutubeMusicAlbumArt(body.name, body.artists) : undefined;
   return c.json({ source: "youtube", videoId: body.videoId, ...(albumArt ? { image: albumArt } : {}) });
+});
+
+app.post("/api/resolve-download", async (c) => {
+  const payload = await verifyAuth(c);
+  if (!payload) return c.json({ error: "Unauthorized" }, 401);
+
+  let body: { videoId?: string; name?: string; artists?: string; duration?: number; source?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (!body.videoId?.trim()) return c.json({ error: "Missing videoId" }, 400);
+
+  const isNumericId = /^\d+$/.test(body.videoId);
+
+  if (isNumericId) {
+    const jioResult = await resolveJioSaavnById(body.videoId, body.name);
+    if (jioResult?.url) {
+      audioCache.set(body.videoId, { cdnUrl: jioResult.url, fetchedAt: Date.now() });
+      return c.json({ source: "jiosaavn", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
+    }
+  }
+
+  const ytAudioUrl = await getYouTubeAudioUrlFull(body.videoId);
+  if (ytAudioUrl) {
+    audioCache.set(body.videoId, { cdnUrl: ytAudioUrl, fetchedAt: Date.now() });
+    return c.json({ source: "youtube", videoId: body.videoId, audioUrl: `/api/audio/${body.videoId}` });
+  }
+
+  return c.json({ error: "Download not available for this track" }, 404);
 });
 
 function extractYouTubeId(url: string): string | null {
@@ -273,7 +305,7 @@ app.post("/api/resolve-link", async (c) => {
   if (!rl.success) return c.json({ error: "rate_limited", retryAfter: rl.reset }, 429);
 
   const preResolveAudio = (vid: string) => {
-    getYouTubeAudioUrl(vid, AbortSignal.timeout(45000))
+    getYouTubeAudioUrl(vid, AbortSignal.timeout(6000))
       .then((ytUrl) => { if (ytUrl) audioCache.set(vid, { cdnUrl: ytUrl, fetchedAt: Date.now() }); })
       .catch(() => {});
   };
@@ -388,7 +420,7 @@ async function resolveAudioUrl(videoId: string): Promise<string | null> {
     if (jioResult?.url) return jioResult.url;
   }
   if (/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-    const ytAudioUrl = await getYouTubeAudioUrl(videoId, AbortSignal.timeout(45000));
+    const ytAudioUrl = await getYouTubeAudioUrl(videoId, AbortSignal.timeout(6000));
     if (ytAudioUrl) return ytAudioUrl;
   }
   return null;

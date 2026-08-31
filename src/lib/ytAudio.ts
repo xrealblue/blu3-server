@@ -166,16 +166,36 @@ async function tryYtdlCore(videoId: string, signal?: AbortSignal): Promise<strin
 
 export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal, depth = 0): Promise<string | null> {
   if (depth > 2) return null;
-  console.log(`[ytAudio] getYouTubeAudioUrl — videoId=${videoId} depth=${depth}`);
 
-  // ── Strategy 1: ytmusic-api ──
   try {
     const yt = await getYTMusic() as any;
     const data = await withSignal(yt.constructRequest("player", { videoId }), signal) as any;
     const actualVideoId = data?.videoDetails?.videoId;
     if (actualVideoId && actualVideoId !== videoId) {
-      console.log(`[ytAudio] ytmusic-api — redirected to ${actualVideoId}, re-fetching`);
       return getYouTubeAudioUrl(actualVideoId, signal, depth + 1);
+    }
+    const formats = data?.streamingData?.adaptiveFormats || [];
+    const audio = formats
+      .filter((f: any) => f.mimeType?.startsWith("audio/"))
+      .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+    return audio?.url || null;
+  } catch (err: any) {
+    if (err?.name === "AbortError") return null;
+    return null;
+  }
+}
+
+export async function getYouTubeAudioUrlFull(videoId: string): Promise<string | null> {
+  console.log(`[ytAudio] getYouTubeAudioUrlFull — videoId=${videoId} (download mode)`);
+
+  // ── Strategy 1: ytmusic-api ──
+  try {
+    const yt = await getYTMusic() as any;
+    const data = await yt.constructRequest("player", { videoId }) as any;
+    const actualVideoId = data?.videoDetails?.videoId;
+    if (actualVideoId && actualVideoId !== videoId) {
+      console.log(`[ytAudio] ytmusic-api — redirected to ${actualVideoId}`);
+      return getYouTubeAudioUrlFull(actualVideoId);
     }
     const formats = data?.streamingData?.adaptiveFormats || [];
     const audio = formats
@@ -188,24 +208,18 @@ export async function getYouTubeAudioUrl(videoId: string, signal?: AbortSignal, 
     }
     console.log(`[ytAudio] ytmusic-api — no audio URL in response`);
   } catch (err: any) {
-    if (err?.name === "AbortError") {
-      console.log(`[ytAudio] ytmusic-api — aborted`);
-      return null;
-    }
     console.error(`[ytAudio] ytmusic-api — FAILED: ${err?.message?.slice(0, 120) || "unknown"}`);
   }
 
   // ── Strategy 2: ytdl-core-enhanced ──
-  if (signal?.aborted) return null;
-  const ytdlUrl = await tryYtdlCore(videoId, signal);
+  const ytdlUrl = await tryYtdlCore(videoId);
   if (ytdlUrl) return ytdlUrl;
 
-  // ── Strategy 3-5: yt-dlp ──
-  if (signal?.aborted) return null;
+  // ── Strategy 3+: yt-dlp ──
   const ytdlpUrl = tryYtDlp(videoId);
   if (ytdlpUrl) return ytdlpUrl;
 
-  console.error(`[ytAudio] getYouTubeAudioUrl — ALL FALLBACKS FAILED for ${videoId}`);
+  console.error(`[ytAudio] getYouTubeAudioUrlFull — ALL FALLBACKS FAILED for ${videoId}`);
   return null;
 }
 
